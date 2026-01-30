@@ -18,7 +18,7 @@ CocoaPods:
 ```ruby
 pod 'SmartYardVideoPlayer',
   :git => 'https://github.com/rosteleset/SmartYard-VideoPlayer-iOS.git',
-  :tag => '0.1.0'
+  :tag => '0.1.1'
 ```
 
 ## Usage
