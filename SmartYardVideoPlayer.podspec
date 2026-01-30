@@ -17,9 +17,9 @@ HLS prefetching, caching, and customizable controls.
   s.platform = :ios, "13.0"
   s.swift_version = "6.0"
 
-  s.source_files = "Sources/SmartYardVideoPlayer/**/*.swift"
+  s.source_files = "{Models,Playback,Player,Prefetch,Support,VideoSliders}/**/*.swift"
   s.resource_bundles = {
-    "SmartYardVideoPlayer" => ["Sources/SmartYardVideoPlayer/Resources/**/*"]
+    "SmartYardVideoPlayer" => ["Resources/**/*"]
   }
 
   s.frameworks = "UIKit", "AVFoundation", "Network"
