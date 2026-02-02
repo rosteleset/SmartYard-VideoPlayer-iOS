@@ -25,6 +25,7 @@ protocol SYPlayerControllerDelegate: AnyObject {
     )
 }
 
+@MainActor
 final class SYPlayerController {
 
     // MARK: - Delegate

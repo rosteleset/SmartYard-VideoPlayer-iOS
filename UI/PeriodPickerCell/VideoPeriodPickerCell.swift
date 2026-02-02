@@ -16,7 +16,7 @@ final class VideoPeriodPickerCell: UICollectionViewCell {
         super.awakeFromNib()
         
         titleLabel.text = nil
-        layerBorderColor = UIColor.SmartYard.gray
+        layerBorderColor = SYPlayerConfig.shared.colors.periodPickerBorderColor
         layerCornerRadius = 3
         
         updateSelectedState(false)
@@ -33,9 +33,8 @@ final class VideoPeriodPickerCell: UICollectionViewCell {
     }
     
     private func updateSelectedState(_ newState: Bool) {
-        titleLabel.font = newState ?
-            UIFont.SourceSansPro.bold(size: 14) :
-            UIFont.SourceSansPro.regular(size: 14)
+        let fonts = SYPlayerConfig.shared.fonts
+        titleLabel.font = newState ? fonts.periodPickerSelectedFont : fonts.periodPickerFont
         
         layerBorderWidth = newState ? 1 : 0
     }

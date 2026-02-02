@@ -32,7 +32,7 @@ public enum SYPlayerLogLevel: Int {
 }
 
 public final class SYPlayerConfig {
-    public static let shared = SYPlayerConfig()
+    nonisolated(unsafe) public static let shared = SYPlayerConfig()
 
     // MARK: - Playback
 
@@ -55,6 +55,7 @@ public final class SYPlayerConfig {
 
     public var icons: SYPlayerIcons = SYPlayerIcons()
     public var colors: SYPlayerColors = SYPlayerColors()
+    public var fonts: SYPlayerFonts = SYPlayerFonts()
 
     // MARK: - Logs
 
@@ -127,7 +128,7 @@ public final class SYPlayerConfig {
 
     // MARK: - Log Helpers
 
-    private static let logDateFormatter: ISO8601DateFormatter = {
+    nonisolated(unsafe) private static let logDateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter

@@ -9,6 +9,7 @@ public struct SYPlayerColors {
     public var controlsTintColor: UIColor
     public var controlsMaskVisibleColor: UIColor
     public var thumbnailsBackgroundColor: UIColor
+    public var periodPickerBorderColor: UIColor
 
     public init(
         borderColor: UIColor = UIColor(red: 1.0, green: 227.0 / 255.0, blue: 142.0 / 255.0, alpha: 1.0),
@@ -18,7 +19,8 @@ public struct SYPlayerColors {
         controlsTextColor: UIColor = .white,
         controlsTintColor: UIColor = .white,
         controlsMaskVisibleColor: UIColor = UIColor.black.withAlphaComponent(0.4),
-        thumbnailsBackgroundColor: UIColor = UIColor.black.withAlphaComponent(0.5)
+        thumbnailsBackgroundColor: UIColor = UIColor.black.withAlphaComponent(0.5),
+        periodPickerBorderColor: UIColor = UIColor(white: 0.7, alpha: 1.0)
     ) {
         self.borderColor = borderColor
         self.accentColor = accentColor
@@ -28,5 +30,6 @@ public struct SYPlayerColors {
         self.controlsTintColor = controlsTintColor
         self.controlsMaskVisibleColor = controlsMaskVisibleColor
         self.thumbnailsBackgroundColor = thumbnailsBackgroundColor
+        self.periodPickerBorderColor = periodPickerBorderColor
     }
 }

@@ -12,6 +12,8 @@ import RxSwift
 import RxCocoa
 import Lottie
 import Kingfisher
+import SwifterSwift
+import TouchAreaInsets
 
 extension SYPlayerControlView {
     enum ButtonType: Int { case play, pause, favourite, fullscreenToggle }
@@ -330,12 +332,13 @@ final class SYPlayerControlView: UIView {
     /// Initializes subviews and static UI properties.
     private func setupUI() {
         let colors = SYPlayerConfig.shared.colors
+        let fonts = SYPlayerConfig.shared.fonts
 
         mainMaskView.backgroundColor = .clear
         mainView.clipsToBounds = true
 
         titleLabel.textAlignment = .center
-        titleLabel.font = UIFont.SourceSansPro.semibold(size: 24)
+        titleLabel.font = fonts.titleFont
         titleLabel.textColor = colors.controlsTextColor
         titleLabel.numberOfLines = 1
         titleLabel.adjustsFontSizeToFitWidth = true
@@ -364,12 +367,12 @@ final class SYPlayerControlView: UIView {
         previousSpeedButton.titleForNormal = "0.5x"
         previousSpeedButton.setTitleColorForAllStates(colors.controlsTextColor)
         previousSpeedButton.touchAreaInsets = UIEdgeInsets(inset: 12)
-        previousSpeedButton.titleLabel?.font = UIFont.SourceSansPro.regular(size: 20)
+        previousSpeedButton.titleLabel?.font = fonts.speedButtonFont
 
         nextSpeedButton.titleForNormal = "1.5x"
         nextSpeedButton.setTitleColorForAllStates(colors.controlsTextColor)
         nextSpeedButton.touchAreaInsets = UIEdgeInsets(inset: 12)
-        nextSpeedButton.titleLabel?.font = UIFont.SourceSansPro.regular(size: 20)
+        nextSpeedButton.titleLabel?.font = fonts.speedButtonFont
 
         progressSlider.setReferenceCalendar(.serverCalendar)
         progressSlider.touchAreaInsets = UIEdgeInsets(inset: 6)

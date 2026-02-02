@@ -34,7 +34,7 @@ final class SYVideoTimeView: UIView {
         // Add time label
         timeLabel.textAlignment = .center
         timeLabel.textColor = colors.textColor
-        timeLabel.font = .SourceSansPro.semibold(size: 12)
+        timeLabel.font = SYPlayerConfig.shared.fonts.timeLabelFont
         addSubview(timeLabel)
     }
 
