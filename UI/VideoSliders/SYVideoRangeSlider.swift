@@ -15,7 +15,7 @@ protocol SYVideoRangeSliderDelegate: AnyObject {
         isUpperBoundReached: Bool,
         screenshotPolicy: SYVideoRangeSlider.ScreenshotPolicy
     )
-    
+
 }
 
 final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
@@ -31,15 +31,15 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
         case start
         case end
     }
-    
+
     weak var delegate: SYVideoRangeSliderDelegate? = nil
 
     private let startIndicator = SYVideoStartIndicator()
     private let endIndicator = SYVideoEndIndicator()
-    
+
     private let startCropBlurView = UIView()
     private let endCropBlurView = UIView()
-    
+
     private let thumbnailsContainer = UIView()
     private var thumbnailViews = [(UIImageView, UIActivityIndicatorView)]()
 
@@ -47,7 +47,7 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
     private let endTimeView = SYVideoTimeView(size: .zero)
 
     private let duration: Float64 = 3600 // limiting timespan to one hour
-    
+
     private var startPercentage: CGFloat = 0         // Represented in percentage
     private var endPercentage: CGFloat = 100       // Represented in percentage
     private var isReceivingGesture: Bool = false
@@ -56,34 +56,34 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
     var maxSpace: Float = 0              // In Seconds
 
     private var visibleTimelineEndDate = Date()
-    
+
     private var visibleTimelineStartDate: Date {
         return visibleTimelineEndDate.addingTimeInterval(-duration)
     }
-    
+
     private var isLowerBoundReached: Bool {
         guard let lowerBound = absoluteTimelineLowerBound else {
             return false
         }
-        
+
         return visibleTimelineStartDate <= lowerBound
     }
-    
+
     private var isUpperBoundReached: Bool {
         guard let upperBound = absoluteTimelineUpperBound else {
             return false
         }
-        
+
         return visibleTimelineEndDate >= upperBound
     }
-    
+
     private var absoluteTimelineLowerBound: Date?
     private var absoluteTimelineUpperBound: Date?
-    
+
     private var latestScreenshotPolicy: ScreenshotPolicy = .middle
-    
+
     private var referenceCalendar = Calendar.current
-    
+
     /// Initializes after loading from nib.
     override func awakeFromNib() {
         super.awakeFromNib()
@@ -104,11 +104,13 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
     /// Sets up subviews and gesture recognizers.
     private func setup(){
         backgroundColor = .clear
-        
+
+        let colors = SYPlayerConfig.shared.colors
+
         layer.cornerRadius = 3
-        layer.borderColor = UIColor(hex: 0xffe38e)?.cgColor
+        layer.borderColor = colors.borderColor.cgColor
         layer.borderWidth = 1
-        
+
         self.isUserInteractionEnabled = true
 
         // Setup Start Indicator
@@ -116,7 +118,7 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             target: self,
             action: #selector(startDragged(recognizer:))
         )
-        
+
         startIndicator.layer.anchorPoint = CGPoint(x: 1, y: 0.5)
         startIndicator.addGestureRecognizer(startDrag)
         self.addSubview(startIndicator)
@@ -127,29 +129,29 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             target: self,
             action: #selector(endDragged(recognizer:))
         )
-        
+
         endIndicator.layer.anchorPoint = CGPoint(x: 0, y: 0.5)
         endIndicator.addGestureRecognizer(endDrag)
         self.addSubview(endIndicator)
 
         // Setup time labels
-        
+
         self.addSubview(startTimeView)
         self.addSubview(endTimeView)
-        
+
         // Setup previews
-        
-        startCropBlurView.backgroundColor = UIColor.SmartYard.secondBackgroundColor.withAlphaComponent(0.7)
-        endCropBlurView.backgroundColor = UIColor.SmartYard.secondBackgroundColor.withAlphaComponent(0.7)
-        
-        thumbnailsContainer.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+
+        startCropBlurView.backgroundColor = colors.accentColor.withAlphaComponent(0.7)
+        endCropBlurView.backgroundColor = colors.accentColor.withAlphaComponent(0.7)
+
+        thumbnailsContainer.backgroundColor = colors.thumbnailsBackgroundColor
         thumbnailsContainer.addSubview(startCropBlurView)
         thumbnailsContainer.addSubview(endCropBlurView)
-        
+
         addSubview(thumbnailsContainer)
         sendSubviewToBack(thumbnailsContainer)
         thumbnailsContainer.layerCornerRadius = 3
-        
+
         let thumbnailViews = [
             (UIImageView(), UIActivityIndicatorView()),
             (UIImageView(), UIActivityIndicatorView()),
@@ -157,58 +159,58 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             (UIImageView(), UIActivityIndicatorView()),
             (UIImageView(), UIActivityIndicatorView())
         ]
-        
+
         self.thumbnailViews = thumbnailViews
-        
+
         thumbnailViews.forEach { imageView, activityIndicator in
             imageView.contentMode = .scaleAspectFill
             imageView.clipsToBounds = true
-            
+
             thumbnailsContainer.addSubview(imageView)
             thumbnailsContainer.sendSubviewToBack(imageView)
-            
-            activityIndicator.color = .SmartYard.secondBackgroundColor
-            
+
+            activityIndicator.color = colors.accentColor
+
             thumbnailsContainer.insertSubview(activityIndicator, aboveSubview: imageView)
         }
     }
-    
+
     /// Shifts the visible timeline backward by the given seconds.
     private func shiftTimelineBackward(_ value: Double) {
         let preferredVisibleTimelineStartDate = visibleTimelineStartDate.addingTimeInterval(-value)
-        
+
         let resultingVisibleTimelineStartDate: Date = {
             guard let lowerBound = absoluteTimelineLowerBound,
-                (absoluteTimelineUpperBound ?? Date.distantFuture).timeIntervalSince(lowerBound) >= 3600 else {
+                  (absoluteTimelineUpperBound ?? Date.distantFuture).timeIntervalSince(lowerBound) >= 3600 else {
                 return preferredVisibleTimelineStartDate
             }
-            
+
             return max(lowerBound, preferredVisibleTimelineStartDate)
         }()
-        
+
         let actualShift = visibleTimelineStartDate.timeIntervalSince(resultingVisibleTimelineStartDate)
 
         let resultingVisibleTimelineEndDate = resultingVisibleTimelineStartDate.addingTimeInterval(3600)
-        
+
         visibleTimelineEndDate = resultingVisibleTimelineEndDate
-        
+
         let currentStartIndicatorTime = secondsFromValue(value: startPercentage)
         let preferredStartIndicatorTime = currentStartIndicatorTime + actualShift
-        
+
         let currentEndIndicatorTime = secondsFromValue(value: endPercentage)
         let preferredEndIndicatorTime = currentEndIndicatorTime + actualShift
         let maxEndIndicatorTime: Double = 3600
-        
+
         let resultingEndIndicatorTime = min(preferredEndIndicatorTime, maxEndIndicatorTime)
-        
+
         let resultingStartIndicatorTime = min(
             resultingEndIndicatorTime - Double(minSpace),
             preferredStartIndicatorTime
         )
-        
+
         startPercentage = valueFromSeconds(seconds: Float(resultingStartIndicatorTime))
         endPercentage = valueFromSeconds(seconds: Float(resultingEndIndicatorTime))
-        
+
         delegate?.didChangeDate(
             videoRangeSlider: self,
             isReceivingGesture: isReceivingGesture,
@@ -218,44 +220,44 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             isUpperBoundReached: isUpperBoundReached,
             screenshotPolicy: latestScreenshotPolicy
         )
-        
+
         layoutSubviews()
     }
-    
+
     /// Shifts the visible timeline forward by the given seconds.
     private func shiftTimelineForward(_ value: Double) {
         let newPreferredVisibleTimelineEndDate = visibleTimelineEndDate.addingTimeInterval(value)
-        
+
         let resultingVisibleTimelineEndDate: Date = {
             guard let upperBound = absoluteTimelineUpperBound,
-                upperBound.timeIntervalSince(absoluteTimelineLowerBound ?? Date.distantPast) >= 3600 else {
+                  upperBound.timeIntervalSince(absoluteTimelineLowerBound ?? Date.distantPast) >= 3600 else {
                 return newPreferredVisibleTimelineEndDate
             }
-            
+
             return min(upperBound, newPreferredVisibleTimelineEndDate)
         }()
-        
+
         let actualShift = resultingVisibleTimelineEndDate.timeIntervalSince(visibleTimelineEndDate)
-        
+
         visibleTimelineEndDate = resultingVisibleTimelineEndDate
 
         let currentStartIndicatorTime = secondsFromValue(value: startPercentage)
         let preferredStartIndicatorTime = currentStartIndicatorTime - actualShift
         let minStartIndicatorTime: Double = 0
-        
+
         let currentEndIndicatorTime = secondsFromValue(value: endPercentage)
         let preferredEndIndicatorTime = currentEndIndicatorTime - actualShift
-        
+
         let resultingStartIndicatorTime = max(preferredStartIndicatorTime, minStartIndicatorTime)
-        
+
         let resultingEndIndicatorTime = max(
             resultingStartIndicatorTime + Double(minSpace),
             preferredEndIndicatorTime
         )
-        
+
         startPercentage = valueFromSeconds(seconds: Float(resultingStartIndicatorTime))
         endPercentage = valueFromSeconds(seconds: Float(resultingEndIndicatorTime))
-        
+
         delegate?.didChangeDate(
             videoRangeSlider: self,
             isReceivingGesture: isReceivingGesture,
@@ -265,55 +267,55 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             isUpperBoundReached: visibleTimelineEndDate == absoluteTimelineUpperBound,
             screenshotPolicy: latestScreenshotPolicy
         )
-        
+
         layoutSubviews()
     }
-    
+
     /// Shifts the visible timeline by the given seconds.
     func shiftTimelineByValueInSeconds(_ value: Double) {
         guard !isReceivingGesture, value != 0 else {
             return
         }
-        
+
         value < 0 ? shiftTimelineBackward(abs(value)) : shiftTimelineForward(value)
     }
-    
+
     /// Sets a thumbnail image at a given index.
     func setThumbnailImage(_ image: UIImage?, atIndex index: Int) {
         guard let (imageView, activityIndicator) = thumbnailViews[safe: index] else {
             return
         }
-        
+
         imageView.image = image
         activityIndicator.stopAnimating()
     }
-    
+
     /// Clears all thumbnail images.
     func resetThumbnailImages() {
         thumbnailViews.forEach { imageView, _ in
             imageView.image = nil
         }
     }
-    
+
     /// Shows or hides thumbnail activity indicators.
     func setActivityIndicatorsHidden(_ isHidden: Bool) {
         thumbnailViews.forEach { _, activityIndicator in
             isHidden ? activityIndicator.stopAnimating() : activityIndicator.startAnimating()
         }
     }
-    
+
     /// Configures visible timeline and absolute bounds.
     func setTimelineConfiguration(visibleTimelineEndDate: Date, lowerBound: Date?, upperBound: Date?) {
         self.visibleTimelineEndDate = visibleTimelineEndDate
-        
+
         startPercentage = 0
         endPercentage = 100
-        
+
         absoluteTimelineLowerBound = lowerBound
         absoluteTimelineUpperBound = upperBound
-        
+
         latestScreenshotPolicy = .middle
-        
+
         delegate?.didChangeDate(
             videoRangeSlider: self,
             isReceivingGesture: isReceivingGesture,
@@ -323,14 +325,14 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             isUpperBoundReached: isUpperBoundReached,
             screenshotPolicy: latestScreenshotPolicy
         )
-        
+
         layoutSubviews()
     }
-    
+
     /// Sets the calendar used for time formatting.
     func setReferenceCalendar(_ calendar: Calendar) {
         referenceCalendar = calendar
-        
+
         layoutSubviews()
     }
 
@@ -346,7 +348,7 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             currentIndicator: self.startIndicator
         )
     }
-    
+
     /// Handles dragging of the end handle.
     @objc private func endDragged(recognizer: UIPanGestureRecognizer){
         self.processHandleDrag(
@@ -367,17 +369,17 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
         guard duration > 0 else {
             return
         }
-        
+
         self.updateGestureStatus(recognizer: recognizer)
-        
+
         let translation = recognizer.translation(in: self)
-        
+
         var position: CGFloat = positionFromValue(value: currentPositionPercentage) // self.startPercentage or self.endPercentage
-        
+
         position = position + translation.x
-        
+
         if position < startIndicator.bounds.width { position = startIndicator.bounds.width }
-        
+
         if position > self.frame.size.width - endIndicator.bounds.width {
             position = self.frame.size.width - endIndicator.bounds.width
         }
@@ -396,24 +398,24 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
                 }
             }
         }
-        
+
         recognizer.setTranslation(CGPoint.zero, in: self)
-        
+
         currentIndicator.center = CGPoint(x: position , y: currentIndicator.center.y)
-        
+
         let percentage = valueFromPosition(position: currentIndicator.center.x)
-        
+
         if drag == .start {
             self.startPercentage = percentage
         } else {
             self.endPercentage = percentage
         }
-        
+
         let startSeconds = negateConversionLosses(secondsFromValue(value: self.startPercentage))
         let endSeconds = negateConversionLosses(secondsFromValue(value: self.endPercentage))
-        
+
         latestScreenshotPolicy = drag == .end ? .end : .start
-        
+
         delegate?.didChangeDate(
             videoRangeSlider: self,
             isReceivingGesture: isReceivingGesture,
@@ -423,10 +425,10 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             isUpperBoundReached: isUpperBoundReached,
             screenshotPolicy: latestScreenshotPolicy
         )
-        
+
         layoutSubviews()
     }
-    
+
     // MARK: - Drag Functions Helpers
     /// Converts percentage value to x-position.
     private func positionFromValue(value: CGFloat) -> CGFloat {
@@ -436,15 +438,15 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
 
         return neededPosition
     }
-    
+
     /// Converts x-position to percentage value.
     private func valueFromPosition(position: CGFloat) -> CGFloat {
         let startPosition = startIndicator.bounds.width
         let endPosition = frame.size.width - endIndicator.bounds.width
-        
+
         return (position - startPosition) * 100 / (endPosition - startPosition)
     }
-    
+
     /// Returns min/max limits for the active handle.
     private func getPositionLimits(with drag: DragHandleChoice) -> (min: CGFloat, max: CGFloat) {
         if drag == .start {
@@ -459,7 +461,7 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             )
         }
     }
-    
+
     /// Applies edge-case constraints for handle movement.
     private func checkEdgeCasesForPosition(with position: CGFloat, and positionLimit: CGFloat, and drag: DragHandleChoice) -> CGFloat {
         if drag == .start {
@@ -479,10 +481,10 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
                 }
             }
         }
-        
+
         return position
     }
-    
+
     /// Converts percentage value to seconds.
     private func secondsFromValue(value: CGFloat) -> Float64 {
         return duration * Float64((value / 100))
@@ -493,10 +495,10 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
         guard duration > 0 else {
             return 0
         }
-        
+
         return CGFloat(seconds * 100) / CGFloat(duration)
     }
-    
+
     /// Updates gesture state flags.
     private func updateGestureStatus(recognizer: UIGestureRecognizer) {
         if recognizer.state == .began {
@@ -513,12 +515,12 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
     /// Lays out handles, time labels, and thumbnails.
     override func layoutSubviews() {
         super.layoutSubviews()
-        
+
         let startEndTextValues = getStartEndIndicatorTextValues(
             startPercentage: startPercentage,
             endPercentage: endPercentage
         )
-        
+
         startTimeView.timeLabel.text = startEndTextValues.startText
         endTimeView.timeLabel.text = startEndTextValues.endText
 
@@ -527,23 +529,23 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
 
         startIndicator.center = CGPoint(x: startPosition, y: startIndicator.center.y)
         startIndicator.size = CGSize(width: 12, height: bounds.height)
-        
+
         endIndicator.center = CGPoint(x: endPosition, y: endIndicator.center.y)
         endIndicator.size = CGSize(width: 12, height: bounds.height)
-        
+
         UIView.animate(withDuration: 0.05) { [weak self] in
             guard let self = self else {
                 return
             }
-            
+
             let startTimeViewWidth = self.startTimeView.intrinsicContentSize.width
             let startTimeViewHeight = self.startTimeView.intrinsicContentSize.height
-            
+
             let preferredStartTimeViewX = self.startIndicator.frame.origin.x
             let minStartTimeViewX: CGFloat = 0
             let maxStartTimeViewX = self.bounds.width - startTimeViewWidth
             let resultingStartTimeViewX = min(maxStartTimeViewX, max(minStartTimeViewX, preferredStartTimeViewX))
-            
+
             // Update time view
             self.startTimeView.frame = CGRect(
                 x: resultingStartTimeViewX,
@@ -551,22 +553,22 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
                 width: startTimeViewWidth,
                 height: startTimeViewHeight
             )
-            
+
             let endTimeViewWidth = self.endTimeView.intrinsicContentSize.width
-            
+
             let preferredEndTimeViewX = self.endIndicator.frame.origin.x + self.endIndicator.frame.width - self.endTimeView.intrinsicContentSize.width
             let minEndTimeViewX: CGFloat = 0
             let maxEndTimeViewX = self.bounds.width - endTimeViewWidth
             let resultingEndTimeViewX = min(maxEndTimeViewX, max(minEndTimeViewX, preferredEndTimeViewX))
-            
+
             let endTimeViewY: CGFloat = {
                 guard resultingEndTimeViewX >= resultingStartTimeViewX + startTimeViewWidth + 7 else {
                     return -self.endTimeView.intrinsicContentSize.height - 7 - startTimeViewHeight - 7
                 }
-                
+
                 return -self.endTimeView.intrinsicContentSize.height - 7
             }()
-            
+
             self.endTimeView.frame = CGRect(
                 x: resultingEndTimeViewX,
                 y: endTimeViewY,
@@ -574,70 +576,70 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
                 height: self.endTimeView.intrinsicContentSize.height
             )
         }
-        
+
         // Update fake thumbnails frames
-        
+
         startCropBlurView.frame = CGRect(
             x: 0,
             y: 0,
             width: startIndicator.frame.origin.x + 3,
             height: bounds.height
         )
-        
+
         endCropBlurView.frame = CGRect(
             x: endIndicator.frame.origin.x + endIndicator.frame.size.width - 3,
             y: 0,
             width: bounds.width - (endIndicator.frame.origin.x + endIndicator.frame.size.width) + 3,
             height: bounds.height
         )
-        
+
         thumbnailsContainer.frame = bounds
-        
+
         guard !thumbnailViews.isEmpty else {
             return
         }
-        
+
         let imageWidth = bounds.width / CGFloat(thumbnailViews.count)
-        
+
         thumbnailViews.enumerated().forEach { offset, element in
             let (imageView, activityIndicator) = element
-            
+
             imageView.frame = CGRect(
                 x: CGFloat(offset) * imageWidth,
                 y: 0,
                 width: imageWidth,
                 height: bounds.height
             )
-            
+
             activityIndicator.center = imageView.center
         }
     }
-    
+
     /// Returns formatted text for start/end indicators.
     private func getStartEndIndicatorTextValues(
         startPercentage: CGFloat, endPercentage: CGFloat
     ) -> (startText: String, endText: String) {
         let startSeconds = negateConversionLosses(secondsFromValue(value: startPercentage))
         let startIndicatorDate = visibleTimelineStartDate.addingTimeInterval(startSeconds)
-        
+
         let endSeconds = negateConversionLosses(secondsFromValue(value: endPercentage))
         let endIndicatorDate = visibleTimelineStartDate.addingTimeInterval(endSeconds)
-        
+
         let format: String = {
             return startIndicatorDate.day == endIndicatorDate.day ? "HH:mm:ss" : "dd.MM HH:mm:ss"
         }()
-        
+
         let formatter = DateFormatter()
-        
+
         formatter.timeZone = referenceCalendar.timeZone
         formatter.dateFormat = format
-        
+
         return (
             formatter.string(from: startIndicatorDate),
             formatter.string(from: endIndicatorDate)
         )
     }
-    
+
     /// Avoids minor precision loss for near-integer values.
     private func negateConversionLosses(_ value: Float64) -> Float64 {
         if abs(value.rounded() - value) < 0.00001 {
@@ -646,7 +648,7 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             return value
         }
     }
-    
+
     /// Expands hit testing area for easier interaction.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         let extendedBounds = CGRect(
@@ -655,10 +657,10 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
             width: self.frame.size.width + 30,
             height: self.frame.size.height
         )
-        
+
         return extendedBounds.contains(point)
     }
-    
+
 }
 
 // swiftlint:enable all

@@ -3,7 +3,7 @@ import KTVHTTPCache
 
 enum SYKTVHTTPCacheCoordinator {
     private static let startQueue = DispatchQueue(label: "sy.ktvhttpcache.start")
-    private static var didStart = false
+    nonisolated(unsafe) private static var didStart = false
 
     /// Starts the KTVHTTPCache proxy if needed.
     static func ensureStarted() {
@@ -11,7 +11,7 @@ enum SYKTVHTTPCacheCoordinator {
             guard !didStart else { return }
             SYPlayerConfig.shared.log("KTVHTTPCache start", level: .debug)
             var error: NSError?
-            _ = KTVHTTPCache.proxyStart(&error)
+            _ = try? KTVHTTPCache.proxyStart()
             didStart = KTVHTTPCache.proxyIsRunning()
             if let error {
                 SYPlayerConfig.shared.log(

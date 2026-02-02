@@ -329,18 +329,20 @@ final class SYPlayerControlView: UIView {
 
     /// Initializes subviews and static UI properties.
     private func setupUI() {
+        let colors = SYPlayerConfig.shared.colors
+
         mainMaskView.backgroundColor = .clear
         mainView.clipsToBounds = true
 
         titleLabel.textAlignment = .center
         titleLabel.font = UIFont.SourceSansPro.semibold(size: 24)
-        titleLabel.textColor = .white
+        titleLabel.textColor = colors.controlsTextColor
         titleLabel.numberOfLines = 1
         titleLabel.adjustsFontSizeToFitWidth = true
 
         fullscreenButton.imageForNormal = SYPlayerConfig.shared.icon(.fullscreenEnter)
         fullscreenButton.imageForSelected = SYPlayerConfig.shared.icon(.fullscreenExit)
-        fullscreenButton.tintColor = .white
+        fullscreenButton.tintColor = colors.controlsTintColor
         fullscreenButton.tag = ButtonType.fullscreenToggle.rawValue
         fullscreenButton.touchAreaInsets = UIEdgeInsets(inset: 12)
 
@@ -360,12 +362,12 @@ final class SYPlayerControlView: UIView {
         playButton.tag = ButtonType.play.rawValue
 
         previousSpeedButton.titleForNormal = "0.5x"
-        previousSpeedButton.setTitleColorForAllStates(.white)
+        previousSpeedButton.setTitleColorForAllStates(colors.controlsTextColor)
         previousSpeedButton.touchAreaInsets = UIEdgeInsets(inset: 12)
         previousSpeedButton.titleLabel?.font = UIFont.SourceSansPro.regular(size: 20)
 
         nextSpeedButton.titleForNormal = "1.5x"
-        nextSpeedButton.setTitleColorForAllStates(.white)
+        nextSpeedButton.setTitleColorForAllStates(colors.controlsTextColor)
         nextSpeedButton.touchAreaInsets = UIEdgeInsets(inset: 12)
         nextSpeedButton.titleLabel?.font = UIFont.SourceSansPro.regular(size: 20)
 
@@ -570,6 +572,7 @@ final class SYPlayerControlView: UIView {
         isShowingControls = visible
 
         let alpha: CGFloat = visible ? 1.0 : 0.0
+        let colors = SYPlayerConfig.shared.colors
 
         UIApplication.shared.setStatusBarHidden(!visible, with: .fade)
 
@@ -581,7 +584,7 @@ final class SYPlayerControlView: UIView {
                 topView.alpha = alpha
                 bottomView.alpha = alpha
                 mainView.alpha = alpha
-                mainMaskView.backgroundColor = .black.withAlphaComponent(visible ? 0.4 : 0.0)
+                mainMaskView.backgroundColor = visible ? colors.controlsMaskVisibleColor : .clear
                 layoutIfNeeded()
             },
             completion: { [weak self] _ in

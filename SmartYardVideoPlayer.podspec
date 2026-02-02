@@ -29,4 +29,6 @@ HLS prefetching, caching, and customizable controls.
   s.dependency "lottie-ios"
   s.dependency "Kingfisher"
   s.dependency "KTVHTTPCache"
+  s.dependency "SwifterSwift"
+  s.dependency "TouchAreaInsets"
 end

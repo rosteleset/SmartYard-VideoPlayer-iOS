@@ -54,6 +54,7 @@ public final class SYPlayerConfig {
     // MARK: - Assets
 
     public var icons: SYPlayerIcons = SYPlayerIcons()
+    public var colors: SYPlayerColors = SYPlayerColors()
 
     // MARK: - Logs
 

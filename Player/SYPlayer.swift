@@ -101,7 +101,7 @@ final class SYPlayer: UIView {
     /// Builds the view hierarchy and hooks up the engine.
     private func setup() {
         SYPlayerConfig.shared.log("Player setup", level: .debug)
-        backgroundColor = .black
+        backgroundColor = SYPlayerConfig.shared.colors.playerBackgroundColor
 
         playerLayer.videoGravity = videoGravity
         playerLayer.attach(player: engine.player)

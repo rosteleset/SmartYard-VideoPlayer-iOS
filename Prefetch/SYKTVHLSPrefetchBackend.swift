@@ -23,6 +23,9 @@ final class SYKTVHLSPrefetchBackend: NSObject, SYHLSPrefetchBackend {
             )
             let request = KTVHCDataRequest(url: url, headers: nil)
             let loader = KTVHTTPCache.cacheHLSLoader(with: request)
+
+            guard let loader else { return }
+
             loader.delegate = self
             loader.object = url
             self.tasks[url] = PrefetchTask(loader: loader, completion: completion)
@@ -59,6 +62,10 @@ final class SYKTVHLSPrefetchBackend: NSObject, SYHLSPrefetchBackend {
 }
 
 extension SYKTVHLSPrefetchBackend: KTVHCDataHLSLoaderDelegate {
+    func ktv_HLSLoader(_ loader: KTVHCDataHLSLoader!, didChangeProgress progress: Double) {
+
+    }
+
     /// Called when an HLS loader finishes successfully.
     func ktv_HLSLoaderDidFinish(_ loader: KTVHCDataHLSLoader) {
         SYPlayerConfig.shared.log("KTVHLSPrefetch finished", level: .debug)

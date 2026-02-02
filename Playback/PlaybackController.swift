@@ -211,7 +211,7 @@ final class SYPlayerController {
     /// Observes app lifecycle to pause/resume playback.
     private func bindAppLifecycle() {
         NotificationCenter.default.rx.notification(UIApplication.didEnterBackgroundNotification)
-            .asDriverOnErrorJustComplete()
+            .asDriver { _ in .empty() }
             .drive { [weak self] _ in
                 SYPlayerConfig.shared.log("Controller app did enter background", level: .debug)
                 self?.playerView.pause(allowAutoPlay: true)
@@ -219,7 +219,7 @@ final class SYPlayerController {
             .disposed(by: disposeBag)
 
         NotificationCenter.default.rx.notification(UIApplication.willEnterForegroundNotification)
-            .asDriverOnErrorJustComplete()
+            .asDriver { _ in .empty() }
             .drive { [weak self] _ in
                 guard let self else { return }
 
