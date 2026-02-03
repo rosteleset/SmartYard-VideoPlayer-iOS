@@ -9,7 +9,7 @@
 import Foundation
 import AVFoundation
 
-struct SYPlayerResource {
+public struct SYPlayerResource {
     let videos: [SYPlayerResourceVideo]
     let previewImage: URL?
     let name: String
@@ -32,7 +32,7 @@ struct SYPlayerResource {
     }
 
     /// Creates a resource with a single video URL.
-    init(
+    public init(
         url: URL,
         previewImage: URL? = nil,
         name: String = "",

@@ -61,26 +61,32 @@ final class SYPlayerEngine {
     private(set) var state: SYPlayerState = .idle {
         didSet {
             guard oldValue != state else { return }
+            let newState = state
             let level: SYPlayerLogLevel = {
-                if case .error = state { return .error }
+                if case .error = newState { return .error }
                 return .debug
             }()
             SYPlayerConfig.shared.log(
-                "Engine state changed from \(oldValue) to \(state)",
+                "Engine state changed from \(oldValue) to \(newState)",
                 level: level
             )
-            delegate?.playerEngine(self, stateDidChange: state)
+            notifyDelegate { engine, delegate in
+                delegate.playerEngine(engine, stateDidChange: newState)
+            }
         }
     }
 
     private(set) var isPlaying: Bool = false {
         didSet {
             guard oldValue != isPlaying else { return }
+            let playingNow = isPlaying
             SYPlayerConfig.shared.log(
-                "Engine isPlaying changed from \(oldValue) to \(isPlaying)",
+                "Engine isPlaying changed from \(oldValue) to \(playingNow)",
                 level: .debug
             )
-            delegate?.playerEngine(self, isPlayingDidChange: isPlaying)
+            notifyDelegate { engine, delegate in
+                delegate.playerEngine(engine, isPlayingDidChange: playingNow)
+            }
         }
     }
 
@@ -195,6 +201,21 @@ final class SYPlayerEngine {
         removePeriodicTimeObserver()
         removePlayerObservers()
     }
+
+    private func notifyDelegate(
+        _ action: @escaping (SYPlayerEngine, SYPlayerEngineDelegate) -> Void
+    ) {
+        if Thread.isMainThread {
+            guard let delegate else { return }
+            action(self, delegate)
+            return
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let delegate = self.delegate else { return }
+            action(self, delegate)
+        }
+    }
 }
 
 private extension SYPlayerEngine {
@@ -204,15 +225,24 @@ private extension SYPlayerEngine {
     /// Observes player rate changes to update playing state.
     func observe(_ player: AVPlayer) {
         // player.rate -> isPlaying + статус
-        playerRateObs = player.observe(\.rate, options: [.new]) { [weak self] p, _ in
+        let installObserver = { [weak self] in
             guard let self else { return }
+            playerRateObs = player.observe(\.rate, options: [.new]) { [weak self] _, change in
+                guard let self else { return }
 
-            // проверка играем ли мы сейчас
-            let playingNow = p.rate != 0
-            isPlaying = playingNow
+                // проверка играем ли мы сейчас
+                let playingNow = (change.newValue ?? 0) != 0
+                isPlaying = playingNow
 
-            // если пошёл rate и мы готовы —> считаем playing
-            if playingNow { if case .ready = state { state = .playing } }
+                // если пошёл rate и мы готовы —> считаем playing
+                if playingNow { if case .ready = state { state = .playing } }
+            }
+        }
+
+        if Thread.isMainThread {
+            installObserver()
+        } else {
+            DispatchQueue.main.async(execute: installObserver)
         }
     }
 
@@ -261,7 +291,9 @@ private extension SYPlayerEngine {
             let total = item.duration.seconds
             let totalSafe = total.isFinite ? total : 0
 
-            delegate?.playerEngine(self, loadedTimeDidChange: loaded, total: totalSafe)
+            notifyDelegate { engine, delegate in
+                delegate.playerEngine(engine, loadedTimeDidChange: loaded, total: totalSafe)
+            }
         }
 
         // playbackBufferEmpty -> buffering
@@ -308,7 +340,9 @@ private extension SYPlayerEngine {
         if let item = player.currentItem {
             let total = item.duration.seconds
             let totalSafe = total.isFinite ? total : 0
-            delegate?.playerEngine(self, playTimeDidChange: totalSafe, total: totalSafe)
+            notifyDelegate { engine, delegate in
+                delegate.playerEngine(engine, playTimeDidChange: totalSafe, total: totalSafe)
+            }
         }
     }
 
@@ -330,7 +364,9 @@ private extension SYPlayerEngine {
             let currentSafe = current.isFinite ? current : 0
             let totalSafe = total.isFinite ? total : 0
 
-            delegate?.playerEngine(self, playTimeDidChange: currentSafe, total: totalSafe)
+            notifyDelegate { engine, delegate in
+                delegate.playerEngine(engine, playTimeDidChange: currentSafe, total: totalSafe)
+            }
 
             // Авто-поддержка buffering/ready по текущему состоянию item
             if item.status == .failed {

@@ -2,7 +2,7 @@ import Foundation
 import Network
 
 final class SYHLSPrefetchController {
-    nonisolated(unsafe) static let shared = SYHLSPrefetchController()
+    static let shared = SYHLSPrefetchController()
 
     var policy: SYHLSPrefetchPolicy {
         didSet {

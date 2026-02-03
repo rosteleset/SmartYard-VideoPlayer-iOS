@@ -82,7 +82,7 @@ final class SYVideoRangeSlider: UIView, UIGestureRecognizerDelegate {
 
     private var latestScreenshotPolicy: ScreenshotPolicy = .middle
 
-    private var referenceCalendar = Calendar.current
+    private var referenceCalendar = SYPlayerConfig.shared.referenceCalendar
 
     /// Initializes after loading from nib.
     override func awakeFromNib() {

@@ -8,7 +8,7 @@
 
 import Foundation
 
-enum SYPlayerState: Equatable {
+public enum SYPlayerState: Equatable {
     case idle
     case preparing
     case buffering
@@ -20,7 +20,7 @@ enum SYPlayerState: Equatable {
 }
 
 extension SYPlayerState: CustomStringConvertible {
-    var description: String {
+    public var description: String {
         switch self {
         case .idle: return "idle"
         case .preparing: return "preparing"

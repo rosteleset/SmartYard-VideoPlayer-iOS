@@ -11,7 +11,7 @@ import Foundation
 import RxSwift
 import RxCocoa
 
-protocol SYPlayerControllerDelegate: AnyObject {
+public protocol SYPlayerControllerDelegate: AnyObject {
     /// Called when the player state changes.
     func playerController(
         _ controller: SYPlayerController,
@@ -25,12 +25,11 @@ protocol SYPlayerControllerDelegate: AnyObject {
     )
 }
 
-@MainActor
-final class SYPlayerController {
+public final class SYPlayerController {
 
     // MARK: - Delegate
 
-    weak var delegate: SYPlayerControllerDelegate?
+    public weak var delegate: SYPlayerControllerDelegate?
 
     // MARK: - State
 
@@ -48,18 +47,18 @@ final class SYPlayerController {
     private let bufferRelay = BehaviorRelay<(TimeInterval, TimeInterval)>(value: (0, 0))
     private let isAttachedRelay = BehaviorRelay<Bool>(value: false)
 
-    var state: Driver<SYPlayerState> { stateRelay.asDriver() }
-    var isPlaying: Driver<Bool> { isPlayingRelay.asDriver() }
-    var progress: Driver<(TimeInterval, TimeInterval)> { progressRelay.asDriver() }
-    var buffer: Driver<(TimeInterval, TimeInterval)> { bufferRelay.asDriver() }
-    var isAttached: Driver<Bool> { isAttachedRelay.asDriver() }
+    public var state: Driver<SYPlayerState> { stateRelay.asDriver() }
+    public var isPlaying: Driver<Bool> { isPlayingRelay.asDriver() }
+    public var progress: Driver<(TimeInterval, TimeInterval)> { progressRelay.asDriver() }
+    public var buffer: Driver<(TimeInterval, TimeInterval)> { bufferRelay.asDriver() }
+    public var isAttached: Driver<Bool> { isAttachedRelay.asDriver() }
 
     /// Автозапуск при появлении "владельца" (экрана/вью).
-    var shouldAutoPlayOnAppear: Bool = true
+    public var shouldAutoPlayOnAppear: Bool = true
 
     // MARK: - Init
     /// Creates a controller and optionally sets an initial resource.
-    init(resource: SYPlayerResource? = nil) {
+    public init(resource: SYPlayerResource? = nil) {
         SYPlayerConfig.shared.log(
             "Controller init (hasResource: \(resource != nil))",
             level: .info
@@ -74,14 +73,20 @@ final class SYPlayerController {
     }
 
     deinit {
-        stopHard()
+        if Thread.isMainThread {
+            stopHard()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.stopHard()
+            }
+        }
     }
 
     // MARK: - Public API
     /// Прикрепить плеер к контейнеру (старый контейнер отцепится).
     /// По умолчанию НЕ паузит — чтобы можно было "переезжать" в fullscreen без stop/start.
     /// Attaches the player view to a container.
-    func attach(to container: UIView, pauseBeforeDetach: Bool = false) {
+    public func attach(to container: UIView, pauseBeforeDetach: Bool = false) {
         if currentContainer === container {
             SYPlayerConfig.shared.log("Controller attach skipped (already attached)", level: .debug)
             return
@@ -105,7 +110,7 @@ final class SYPlayerController {
     /// Отцепить плеер от текущего контейнера.
     /// pause=false — "перецепить" без дерготни.
     /// Detaches the player view from its current container.
-    func detach(pause: Bool = false) {
+    public func detach(pause: Bool = false) {
         guard playerView.superview != nil else {
             SYPlayerConfig.shared.log("Controller detach skipped (no superview)", level: .debug)
             currentContainer = nil
@@ -124,7 +129,7 @@ final class SYPlayerController {
 
     /// Установить ресурс. Важно: здесь нет автозапуска — решает owner (play / onAppear).
     /// Sets a new resource without auto-play.
-    func set(resource: SYPlayerResource) {
+    public func set(resource: SYPlayerResource) {
         SYPlayerConfig.shared.log(
             "Controller set resource name: \(resource.name), videos: \(resource.videos.count), type: \(resource.videoType)",
             level: .info
@@ -134,25 +139,25 @@ final class SYPlayerController {
     }
 
     /// Updates the player aspect ratio.
-    func setAspectRatio(_ ratio: SYPlayerAspectRatio) {
+    public func setAspectRatio(_ ratio: SYPlayerAspectRatio) {
         SYPlayerConfig.shared.log("Controller setAspectRatio: \(ratio)", level: .debug)
         playerView.aspectRatio = ratio
     }
 
     /// Mutes or unmutes the player.
-    func setMuted(_ muted: Bool) {
+    public func setMuted(_ muted: Bool) {
         SYPlayerConfig.shared.log("Controller setMuted: \(muted)", level: .debug)
         playerView.setMuted(muted)
     }
 
     /// Sets a close handler for the player view.
-    func setCloseHandler(_ handler: (() -> Void)?) {
+    public func setCloseHandler(_ handler: (() -> Void)?) {
         SYPlayerConfig.shared.log("Controller setCloseHandler", level: .debug)
         playerView.backBlock = handler
     }
 
     /// Starts playback if a resource is set.
-    func play() {
+    public func play() {
         guard resource != nil else {
             SYPlayerConfig.shared.log("Controller play ignored (no resource)", level: .warning)
             return
@@ -162,19 +167,19 @@ final class SYPlayerController {
     }
 
     /// Pauses playback.
-    func pause() {
+    public func pause() {
         SYPlayerConfig.shared.log("Controller pause", level: .debug)
         playerView.pause()
     }
 
     /// Seeks to a given time in seconds.
-    func seek(_ time: TimeInterval) {
+    public func seek(_ time: TimeInterval) {
         SYPlayerConfig.shared.log("Controller seek to \(time)s", level: .debug)
         playerView.seek(time, completion: nil)
     }
 
     /// Call when the owner view appears to auto-play if enabled.
-    func onAppear() {
+    public func onAppear() {
         guard shouldAutoPlayOnAppear else {
             SYPlayerConfig.shared.log("Controller onAppear skipped (autoPlay disabled)", level: .debug)
             return
@@ -188,13 +193,13 @@ final class SYPlayerController {
     }
 
     /// Call when the owner view disappears to pause safely.
-    func onDisappear() {
+    public func onDisappear() {
         SYPlayerConfig.shared.log("Controller onDisappear", level: .debug)
         playerView.pause(allowAutoPlay: true)
     }
 
     /// Fully stops playback and clears state.
-    func stopHard() {
+    public func stopHard() {
         SYPlayerConfig.shared.log("Controller stopHard", level: .info)
         detach(pause: false)
         playerView.pause()

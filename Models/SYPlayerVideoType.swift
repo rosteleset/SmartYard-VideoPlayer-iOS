@@ -8,7 +8,7 @@
 
 import Foundation
 
-enum SYPlayedVideoType {
+public enum SYPlayedVideoType {
     case online  // m3u8
     case archive // mp4
 }

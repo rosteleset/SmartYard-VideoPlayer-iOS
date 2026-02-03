@@ -8,11 +8,11 @@ public struct SYPlayerFonts {
     public var periodPickerSelectedFont: UIFont
 
     public init() {
-        self.titleFont = UIFont.SourceSansPro.semibold(size: 24)
-        self.speedButtonFont = UIFont.SourceSansPro.regular(size: 20)
-        self.timeLabelFont = UIFont.SourceSansPro.semibold(size: 12)
-        self.periodPickerFont = UIFont.SourceSansPro.regular(size: 14)
-        self.periodPickerSelectedFont = UIFont.SourceSansPro.bold(size: 14)
+        self.titleFont = UIFont.systemFont(ofSize: 24, weight: .semibold)
+        self.speedButtonFont = UIFont.systemFont(ofSize: 20, weight: .regular)
+        self.timeLabelFont = UIFont.systemFont(ofSize: 12, weight: .semibold)
+        self.periodPickerFont = UIFont.systemFont(ofSize: 14, weight: .regular)
+        self.periodPickerSelectedFont = UIFont.systemFont(ofSize: 14, weight: .bold)
     }
 
     public init(

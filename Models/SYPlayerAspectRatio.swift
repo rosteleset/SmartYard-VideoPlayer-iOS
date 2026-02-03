@@ -8,7 +8,7 @@
 
 import Foundation
 
-enum SYPlayerAspectRatio {
+public enum SYPlayerAspectRatio {
     case `default`
     case sixteen2nine
     case four2three

@@ -289,7 +289,7 @@ final class SYPlayer: UIView {
 // MARK: - SYPlayerEngineDelegate
 extension SYPlayer: SYPlayerEngineDelegate {
     /// Receives playback state updates from the engine.
-    nonisolated func playerEngine(
+    func playerEngine(
         _ engine: SYPlayerEngine,
         stateDidChange state: SYPlayerState
     ) {
@@ -304,7 +304,7 @@ extension SYPlayer: SYPlayerEngineDelegate {
     }
 
     /// Receives buffer progress updates from the engine.
-    nonisolated func playerEngine(
+    func playerEngine(
         _ engine: SYPlayerEngine,
         loadedTimeDidChange loaded: TimeInterval,
         total: TimeInterval
@@ -317,7 +317,7 @@ extension SYPlayer: SYPlayerEngineDelegate {
     }
 
     /// Receives play time updates from the engine.
-    nonisolated func playerEngine(
+    func playerEngine(
         _ engine: SYPlayerEngine,
         playTimeDidChange current: TimeInterval,
         total: TimeInterval
@@ -330,7 +330,7 @@ extension SYPlayer: SYPlayerEngineDelegate {
     }
 
     /// Receives playing flag updates from the engine.
-    nonisolated func playerEngine(
+    func playerEngine(
         _ engine: SYPlayerEngine,
         isPlayingDidChange isPlaying: Bool
     ) {
@@ -343,7 +343,7 @@ extension SYPlayer: SYPlayerEngineDelegate {
 extension SYPlayer: SYPlayerControlViewDelegate {
 
     /// Applies the requested playback rate.
-    nonisolated func controlView(
+    func controlView(
         controlView: SYPlayerControlView,
         didChangeVideoPlaybackRate rate: Float
     ) {
@@ -351,7 +351,7 @@ extension SYPlayer: SYPlayerControlViewDelegate {
     }
 
     /// Handles control button actions from the UI.
-    nonisolated func controlView(
+    func controlView(
         controlView: SYPlayerControlView,
         didPressButton button: UIButton
     ) {

@@ -374,7 +374,7 @@ final class SYPlayerControlView: UIView {
         nextSpeedButton.touchAreaInsets = UIEdgeInsets(inset: 12)
         nextSpeedButton.titleLabel?.font = fonts.speedButtonFont
 
-        progressSlider.setReferenceCalendar(.serverCalendar)
+        progressSlider.setReferenceCalendar(SYPlayerConfig.shared.referenceCalendar)
         progressSlider.touchAreaInsets = UIEdgeInsets(inset: 6)
         progressSlider.delegate = self
 

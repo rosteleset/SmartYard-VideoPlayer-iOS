@@ -44,7 +44,7 @@ final class SYVideoProgressSlider: UIView, UIGestureRecognizerDelegate {
     public var isReceivingGesture: Bool = false
 
     private var relativeStartDate: Date?
-    private var referenceCalendar = Calendar.current
+    private var referenceCalendar = SYPlayerConfig.shared.referenceCalendar
 
     /// Initializes after loading from nib.
     override func awakeFromNib() {

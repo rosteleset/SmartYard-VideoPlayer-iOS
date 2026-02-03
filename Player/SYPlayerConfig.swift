@@ -32,30 +32,35 @@ public enum SYPlayerLogLevel: Int {
 }
 
 public final class SYPlayerConfig {
-    nonisolated(unsafe) public static let shared = SYPlayerConfig()
+    public static let shared = SYPlayerConfig()
 
     // MARK: - Playback
 
     /// Auto-hide controls
-    var animateTimeInterval: TimeInterval = 2
+    public var animateTimeInterval: TimeInterval = 2
 
     /// online / archive
-    var videoType: SYPlayedVideoType = .online
+    public var videoType: SYPlayedVideoType = .online
 
     /// Должен ли плеер стартовать сразу после setVideo
-    var shouldAutoPlay: Bool = false
+    public var shouldAutoPlay: Bool = false
 
     /// Default buffer settings
-    var preferredForwardBufferDuration: TimeInterval = 6
+    public var preferredForwardBufferDuration: TimeInterval = 6
 
     /// Do we allow streaming resources when paused?
-    var allowNetworkResourcesWhilePaused: Bool = true
+    public var allowNetworkResourcesWhilePaused: Bool = true
 
     // MARK: - Assets
 
     public var icons: SYPlayerIcons = SYPlayerIcons()
     public var colors: SYPlayerColors = SYPlayerColors()
     public var fonts: SYPlayerFonts = SYPlayerFonts()
+
+    // MARK: - Calendar
+
+    /// Calendar used for time formatting in sliders.
+    public var referenceCalendar: Calendar = .current
 
     // MARK: - Logs
 
@@ -128,7 +133,7 @@ public final class SYPlayerConfig {
 
     // MARK: - Log Helpers
 
-    nonisolated(unsafe) private static let logDateFormatter: ISO8601DateFormatter = {
+    private static let logDateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter

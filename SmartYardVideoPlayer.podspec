@@ -15,7 +15,7 @@ HLS prefetching, caching, and customizable controls.
   }
 
   s.platform = :ios, "13.0"
-  s.swift_version = "6.0"
+  s.swift_version = "5.9"
 
   s.source_files = "{Models,Playback,Player,Prefetch,Support,UI}/**/*.swift"
   s.resource_bundles = {
