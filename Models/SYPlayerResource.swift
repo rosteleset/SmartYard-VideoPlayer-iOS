@@ -10,11 +10,11 @@ import Foundation
 import AVFoundation
 
 public struct SYPlayerResource {
-    let videos: [SYPlayerResourceVideo]
-    let previewImage: URL?
-    let name: String
-    let videoType: SYPlayedVideoType
-    let hasSound: Bool
+    public let videos: [SYPlayerResourceVideo]
+    public let previewImage: URL?
+    public let name: String
+    public let videoType: SYPlayedVideoType
+    public let hasSound: Bool
 
     /// Creates a resource with multiple video variants.
     init(
@@ -55,17 +55,17 @@ public struct SYPlayerResource {
     }
 }
 
-final class SYPlayerResourceVideo {
-    let url: URL
-    var options: [String: Any]?
+public final class SYPlayerResourceVideo {
+    public let url: URL
+    public var options: [String: Any]?
 
     /// Builds an AVURLAsset using the current player configuration.
-    var avURLAsset: AVURLAsset {
+    public var avURLAsset: AVURLAsset {
         SYPlayerConfig.shared.makeAsset(url: url, options: options)
     }
 
     /// Creates a video wrapper with the given URL and optional AVURLAsset options.
-    init(url: URL, options: [String: Any]? = nil) {
+    public init(url: URL, options: [String: Any]? = nil) {
         self.url = url
         self.options = options
     }

@@ -3,7 +3,7 @@ import KTVHTTPCache
 
 enum SYKTVHTTPCacheCoordinator {
     private static let startQueue = DispatchQueue(label: "sy.ktvhttpcache.start")
-    nonisolated(unsafe) private static var didStart = false
+    private static var didStart = false
 
     /// Starts the KTVHTTPCache proxy if needed.
     static func ensureStarted() {

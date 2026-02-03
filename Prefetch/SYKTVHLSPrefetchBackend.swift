@@ -82,6 +82,57 @@ extension SYKTVHLSPrefetchBackend: KTVHCDataHLSLoaderDelegate {
         finish(loader: loader)
     }
 
+    func ktv_HLSLoader(_ loader: KTVHCDataHLSLoader, makeURLsForContent content: String) -> [URL] {
+        let components = content.components(separatedBy: "\n")
+        var urls: [URL] = []
+
+        guard let sourceURL = loader.object as? URL else { return [] }
+        var baseComponents = URLComponents(url: sourceURL, resolvingAgainstBaseURL: false)
+        let baseQueryItems = baseComponents?.queryItems ?? []
+        baseComponents?.query = nil
+        baseComponents?.fragment = nil
+        let baseURL = baseComponents?.url ?? sourceURL
+
+        func mergedURL(_ url: URL) -> URL {
+            guard !baseQueryItems.isEmpty else { return url }
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+            var items = components.queryItems ?? []
+            let existing = Set(items.map(\.name))
+            for item in baseQueryItems where !existing.contains(item.name) {
+                items.append(item)
+            }
+            components.queryItems = items
+            return components.url ?? url
+        }
+
+        for line in components {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("#") { continue }
+
+            if trimmed.hasPrefix("http") {
+                if let url = URL(string: trimmed) {
+                    urls.append(mergedURL(url))
+                }
+                continue
+            }
+
+            if trimmed.hasPrefix("./http") {
+                let normalized = trimmed.replacingOccurrences(of: "./http", with: "http")
+                if let url = URL(string: normalized) {
+                    urls.append(mergedURL(url))
+                }
+                continue
+            }
+
+            if let url = URL(string: trimmed, relativeTo: baseURL)?.absoluteURL {
+                urls.append(mergedURL(url))
+            }
+        }
+
+        return urls
+    }
+
     /// Completes and removes a finished loader.
     private func finish(loader: KTVHCDataHLSLoader) {
         queue.async { [weak self] in
