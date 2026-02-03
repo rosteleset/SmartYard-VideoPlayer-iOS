@@ -10,7 +10,7 @@ UIKit-based video player UI and playback components for iOS.
 
 ## Requirements
 - iOS 13.0+
-- Swift 6.0
+- Swift 5.9
 
 ## Installation
 CocoaPods:
@@ -18,7 +18,7 @@ CocoaPods:
 ```ruby
 pod 'SmartYardVideoPlayer',
   :git => 'https://github.com/rosteleset/SmartYard-VideoPlayer-iOS.git',
-  :tag => '0.1.3'
+  :tag => '0.1.4'
 ```
 
 ## Usage
