@@ -55,6 +55,22 @@ fonts.periodPickerSelectedFont = .systemFont(ofSize: 14, weight: .bold)
 SYPlayerConfig.shared.fonts = fonts
 ```
 
+### Icons
+You can override any built-in icon via `SYPlayerConfig.shared.icons`. Any `nil` icons fall back to bundled defaults.
+
+Available fields: `fullscreenEnter`, `fullscreenExit`, `play`, `pause`, `soundOn`, `soundOff`, `rangeSliderStart`, `rangeSliderEnd`, `rangeSliderProgress`.
+
+```swift
+var icons = SYPlayerIcons()
+icons.play = UIImage(systemName: "play.fill")
+icons.pause = UIImage(systemName: "pause.fill")
+icons.soundOn = UIImage(systemName: "speaker.wave.2.fill")
+icons.soundOff = UIImage(systemName: "speaker.slash.fill")
+icons.fullscreenEnter = UIImage(systemName: "arrow.up.left.and.arrow.down.right")
+icons.fullscreenExit = UIImage(systemName: "arrow.down.right.and.arrow.up.left")
+SYPlayerConfig.shared.icons = icons
+```
+
 See the project documentation and source for integration details.
 
 ## License
