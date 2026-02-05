@@ -17,6 +17,7 @@ import TouchAreaInsets
 
 extension SYPlayerControlView {
     enum ButtonType: Int { case play, pause, favourite, fullscreenToggle }
+    typealias Mode = SYPlayerUIMode
 }
 
 protocol SYPlayerControlViewDelegate: AnyObject {
@@ -47,6 +48,7 @@ final class SYPlayerControlView: UIView {
     private var isShowingControls = false
 
     private var videoType: SYPlayedVideoType = SYPlayerConfig.shared.videoType
+    private var mode: Mode = .default
 
     private var hasSound = true
 
@@ -119,8 +121,16 @@ final class SYPlayerControlView: UIView {
 
         // Пересобираем archive UI если нужно
         rebuildArchiveUIIfNeeded()
+        updateTitleVisibility()
         setNeedsLayout()
         layoutIfNeeded()
+    }
+
+    func setMode(_ mode: Mode) {
+        guard self.mode != mode else { return }
+        self.mode = mode
+        updateTitleVisibility()
+        fullscreenButton.isSelected = mode == .fullscreen
     }
 
     /// Prepares UI for a resource and selected index.
@@ -188,28 +198,16 @@ final class SYPlayerControlView: UIView {
 
                 playerLastState = state
 
+                if case .playing = state {
+                    hideLoader()
+                } else {
+                    showLoader()
+                }
+
                 switch state {
-                case .idle:
-                    showLoader()
-                    setControlsVisible(true)
-
-                case .preparing, .buffering:
-                    showLoader()
-                    setControlsVisible(true)
-
-                case .ready, .playing:
-                    hideLoader()
+                case .playing:
                     autoFadeOutControlViewWithAnimation()
-
-                case .paused:
-                    hideLoader()
-                    setControlsVisible(true)
-
-                case .ended:
-                    setControlsVisible(true)
-
-                case .error:
-                    hideLoader()
+                default:
                     setControlsVisible(true)
                 }
             })
@@ -249,20 +247,25 @@ final class SYPlayerControlView: UIView {
     }
 
     /// Shows the preview image (or clears it if URL is nil).
-    func showImageView(url: URL?) {
+    func showImageView(url: URL?, hideLoaderOnFinish: Bool = true) {
         SYPlayerConfig.shared.log(
-            "ControlView show preview (hasURL: \(url != nil))",
+            "ControlView show preview (hasURL: \(url != nil), hideLoaderOnFinish: \(hideLoaderOnFinish))",
             level: .debug
         )
         guard let url else {
             imageView.image = nil
-            hideLoader()
+            if hideLoaderOnFinish, case .playing = playerLastState {
+                hideLoader()
+            }
             return
         }
 
         imageView.isHidden = false
         imageView.kf.setImage(with: url) { [weak self] _ in
-            self?.hideLoader()
+            guard let self else { return }
+            if hideLoaderOnFinish, case .playing = playerLastState {
+                hideLoader()
+            }
         }
     }
 
@@ -525,7 +528,8 @@ final class SYPlayerControlView: UIView {
 
     /// Updates layout for portrait or landscape orientation.
     func updateUI(isPortrait: Bool) {
-        fullscreenButton.isSelected = !isPortrait
+        fullscreenButton.isSelected = mode == .fullscreen
+        updateTitleVisibility()
 
         titleLabel.snp.remakeConstraints {
             if isPortrait {
@@ -575,7 +579,6 @@ final class SYPlayerControlView: UIView {
         isShowingControls = visible
 
         let alpha: CGFloat = visible ? 1.0 : 0.0
-        let colors = SYPlayerConfig.shared.colors
 
         UIApplication.shared.setStatusBarHidden(!visible, with: .fade)
 
@@ -587,7 +590,7 @@ final class SYPlayerControlView: UIView {
                 topView.alpha = alpha
                 bottomView.alpha = alpha
                 mainView.alpha = alpha
-                mainMaskView.backgroundColor = visible ? colors.controlsMaskVisibleColor : .clear
+                mainMaskView.backgroundColor = .clear
                 layoutIfNeeded()
             },
             completion: { [weak self] _ in
@@ -596,6 +599,14 @@ final class SYPlayerControlView: UIView {
                 if visible { autoFadeOutControlViewWithAnimation() }
             }
         )
+    }
+
+    private func updateTitleVisibility() {
+        if videoType == .online {
+            titleLabel.isHidden = mode == .default
+        } else {
+            titleLabel.isHidden = false
+        }
     }
 }
 

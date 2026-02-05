@@ -19,6 +19,14 @@ final class SYPlayerLayerView: UIView {
         didSet { setNeedsLayout() }
     }
 
+    /// Called when AVPlayerLayer becomes ready to display (or loses readiness).
+    var onReadyForDisplay: ((Bool) -> Void)?
+
+    /// Exposes current readiness state.
+    var isReadyForDisplay: Bool { playerLayer.isReadyForDisplay }
+
+    private var readyForDisplayObs: NSKeyValueObservation?
+
     override class var layerClass: AnyClass {
         AVPlayerLayer.self
     }
@@ -44,6 +52,7 @@ final class SYPlayerLayerView: UIView {
     private func setup() {
         // Используем layerClass => self.layer уже AVPlayerLayer
         playerLayer.videoGravity = videoGravity
+        installReadyForDisplayObserver()
     }
 
     /// Attaches an AVPlayer to the layer.
@@ -56,6 +65,20 @@ final class SYPlayerLayerView: UIView {
     func detachPlayer() {
         SYPlayerConfig.shared.log("LayerView detach player", level: .debug)
         playerLayer.player = nil
+    }
+
+    private func installReadyForDisplayObserver() {
+        readyForDisplayObs = playerLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] layer, _ in
+            guard let self else { return }
+            let ready = layer.isReadyForDisplay
+            if Thread.isMainThread {
+                onReadyForDisplay?(ready)
+            } else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onReadyForDisplay?(ready)
+                }
+            }
+        }
     }
 
     /// Lays out the player layer based on the configured aspect ratio.

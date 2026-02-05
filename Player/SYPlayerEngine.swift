@@ -259,7 +259,7 @@ private extension SYPlayerEngine {
             case .readyToPlay:
                 let total = item.duration.seconds
                 let duration = total.isFinite ? total : 0
-                state = .ready(duration: duration)
+                setReadyState(duration: duration)
 
                 // если был отложенный seek — применяем
                 if let pending = pendingSeek {
@@ -316,7 +316,7 @@ private extension SYPlayerEngine {
                     // если длительность известна — можем перевести в ready
                     let total = item.duration.seconds
                     let duration = total.isFinite ? total : 0
-                    state = .ready(duration: duration)
+                    setReadyState(duration: duration)
                 }
             }
         }
@@ -374,7 +374,7 @@ private extension SYPlayerEngine {
             } else if item.isPlaybackLikelyToKeepUp || item.isPlaybackBufferFull {
                 // не насилуем состояние, если уже playing/paused/ended
                 switch state {
-                case .buffering: state = .ready(duration: totalSafe)
+                case .buffering: setReadyState(duration: totalSafe)
                 default: break
                 }
             } else {
@@ -435,5 +435,14 @@ private extension SYPlayerEngine {
     func removePlayerObservers() {
         playerRateObs = nil
         NotificationCenter.default.removeObserver(self)
+    }
+
+    /// Moves to ready state and upgrades to playing if playback already started.
+    func setReadyState(duration: TimeInterval) {
+        state = .ready(duration: duration)
+
+        if isPlaying || player.rate > 0 {
+            state = .playing
+        }
     }
 }

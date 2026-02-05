@@ -144,6 +144,12 @@ public final class SYPlayerController {
         playerView.aspectRatio = ratio
     }
 
+    /// Updates control UI mode (default or fullscreen).
+    public func setMode(_ mode: SYPlayerUIMode) {
+        SYPlayerConfig.shared.log("Controller setMode: \(mode)", level: .debug)
+        playerView.setMode(mode)
+    }
+
     /// Mutes or unmutes the player.
     public func setMuted(_ muted: Bool) {
         SYPlayerConfig.shared.log("Controller setMuted: \(muted)", level: .debug)

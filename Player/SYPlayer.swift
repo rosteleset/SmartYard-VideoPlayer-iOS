@@ -111,6 +111,11 @@ final class SYPlayer: UIView {
             $0.directionalEdges.equalToSuperview()
         }
 
+        playerLayer.onReadyForDisplay = { [weak self] isReady in
+            guard let self, isReady else { return }
+            self.controlView.hideImageView()
+        }
+
         addSubview(controlView)
         controlView.delegate = self
         controlView.player = self
@@ -163,14 +168,19 @@ final class SYPlayer: UIView {
             SYHLSPrefetchController.shared.prefetch(urls: [video.url])
         }
 
-        if SYPlayerConfig.shared.shouldAutoPlay {
+        let shouldAutoPlay = SYPlayerConfig.shared.shouldAutoPlay
+
+        // Превью показываем всегда (если есть), даже при автозапуске — чтобы убрать черный провал.
+        SYPlayerConfig.shared.log("Player show preview image", level: .debug)
+        controlView.showImageView(
+            url: resource.previewImage,
+            hideLoaderOnFinish: !shouldAutoPlay
+        )
+
+        if shouldAutoPlay {
             // Сразу начинаем
             SYPlayerConfig.shared.log("Player autoPlay on setVideo", level: .debug)
             startCurrentVideo(autoPlay: true)
-        } else {
-            // Только превью
-            SYPlayerConfig.shared.log("Player show preview image", level: .debug)
-            controlView.showImageView(url: resource.previewImage)
         }
     }
 
@@ -243,6 +253,11 @@ final class SYPlayer: UIView {
         controlView.updateUI(isPortrait: isPortrait)
     }
 
+    /// Updates the control view UI mode.
+    func setMode(_ mode: SYPlayerUIMode) {
+        controlView.setMode(mode)
+    }
+
     /// Releases resources and observers before deallocation.
     func prepareToDealloc() {
         SYPlayerConfig.shared.log("Player prepareToDealloc", level: .info)
@@ -276,7 +291,6 @@ final class SYPlayer: UIView {
         }
 
         isItemLoaded = true
-        controlView.hideImageView()
         playerLayer.attach(player: engine.player)
         SYPlayerConfig.shared.log(
             "Player startCurrentVideo url: \(video.url.absoluteString), autoPlay: \(autoPlay)",
@@ -297,9 +311,17 @@ extension SYPlayer: SYPlayerEngineDelegate {
         delegate?.syPlayer(player: self, playerStateDidChange: state)
 
         switch state {
-        case .ended: isPlayToTheEnd = true
-        case .ready, .error, .idle: isPlayToTheEnd = false
-        default:  break
+        case .ready, .playing:
+            if playerLayer.isReadyForDisplay {
+                controlView.hideImageView()
+            }
+            if case .ready = state { isPlayToTheEnd = false }
+        case .ended:
+            isPlayToTheEnd = true
+        case .error, .idle:
+            isPlayToTheEnd = false
+        default:
+            break
         }
     }
 
