@@ -66,7 +66,7 @@ enum SYPlayerDefaultIcons {
     static func image(for icon: SYPlayerIcon) -> UIImage? {
         switch icon {
         case .fullscreenEnter:
-            return UIImage(named: "Fulscreen", in: .syPlayer, compatibleWith: nil)
+            return UIImage(named: "Fullscreen", in: .syPlayer, compatibleWith: nil)
         case .fullscreenExit:
             return UIImage(named: "Minimize", in: .syPlayer, compatibleWith: nil)
         case .play:
