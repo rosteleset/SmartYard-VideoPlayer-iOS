@@ -53,6 +53,7 @@ final class SYPlayerControlView: UIView {
     private var hasSound = true
 
     private var playerLastState: SYPlayerState = .idle
+    private var isLoaderVisible = false
 
     // MARK: - UI Elements
     private let mainMaskView = UIView()
@@ -289,20 +290,72 @@ final class SYPlayerControlView: UIView {
         SYPlayerConfig.shared.log("ControlView prepareToDealloc", level: .debug)
         delayItem?.cancel()
         delayItem = nil
+        setLoaderVisible(false, animated: false)
     }
 
     // MARK: - Loader
 
     /// Shows the loading animation.
     private func showLoader() {
-        videoLoadingAnimationView.isHidden = false
-        videoLoadingAnimationView.play()
+        setLoaderVisible(true)
     }
 
     /// Hides the loading animation.
     private func hideLoader() {
-        videoLoadingAnimationView.isHidden = true
-        videoLoadingAnimationView.stop()
+        setLoaderVisible(false)
+    }
+
+    private func setLoaderVisible(_ visible: Bool, animated: Bool = true) {
+        guard isLoaderVisible != visible else {
+            if visible {
+                videoLoadingAnimationView.isHidden = false
+                videoLoadingAnimationView.alpha = 1
+                if !videoLoadingAnimationView.isAnimationPlaying {
+                    videoLoadingAnimationView.play()
+                }
+            } else {
+                videoLoadingAnimationView.alpha = 0
+                videoLoadingAnimationView.isHidden = true
+                videoLoadingAnimationView.stop()
+            }
+            return
+        }
+
+        isLoaderVisible = visible
+        videoLoadingAnimationView.layer.removeAllAnimations()
+
+        if visible {
+            videoLoadingAnimationView.isHidden = false
+            videoLoadingAnimationView.alpha = animated ? 0 : 1
+            videoLoadingAnimationView.play()
+        }
+
+        let applyVisibility: () -> Void = { [weak self] in
+            guard let self else { return }
+            videoLoadingAnimationView.alpha = visible ? 1 : 0
+        }
+
+        let completion: (Bool) -> Void = { [weak self] _ in
+            guard let self else { return }
+            if !visible {
+                videoLoadingAnimationView.stop()
+                videoLoadingAnimationView.isHidden = true
+            }
+        }
+
+        guard animated else {
+            applyVisibility()
+            completion(true)
+            return
+        }
+
+        UIView.animate(
+            withDuration: visible ? 0.22 : 0.18,
+            delay: 0,
+            options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction],
+            animations: applyVisibility,
+            completion: completion
+        )
     }
 
     // MARK: - Auto hide
@@ -361,6 +414,8 @@ final class SYPlayerControlView: UIView {
         videoLoadingAnimationView.animation = animation
         videoLoadingAnimationView.loopMode = .loop
         videoLoadingAnimationView.backgroundBehavior = .pauseAndRestore
+        videoLoadingAnimationView.isHidden = true
+        videoLoadingAnimationView.alpha = 0
 
         playButton.imageForNormal = SYPlayerConfig.shared.icon(.play)
         playButton.imageForSelected = SYPlayerConfig.shared.icon(.pause)

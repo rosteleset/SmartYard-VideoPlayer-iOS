@@ -77,6 +77,7 @@ final class SYPlayer: UIView {
     private var isPauseByUser: Bool = false
     private var isPlayToTheEnd: Bool = false
     private var isItemLoaded: Bool = false
+    private var didAnimateVideoFadeIn: Bool = false
 
     private var isPortrait: Bool { bounds.height > bounds.width }
 
@@ -113,6 +114,7 @@ final class SYPlayer: UIView {
 
         playerLayer.onReadyForDisplay = { [weak self] isReady in
             guard let self, isReady else { return }
+            self.revealVideoIfNeeded()
             self.controlView.hideImageView()
         }
 
@@ -153,6 +155,7 @@ final class SYPlayer: UIView {
         isPlayToTheEnd = false
         isItemLoaded = false
         isPauseByUser = false
+        prepareVideoForSmoothStart()
 
         controlView.configure(videoType: resource.videoType, hasSound: resource.hasSound)
 
@@ -170,12 +173,8 @@ final class SYPlayer: UIView {
 
         let shouldAutoPlay = SYPlayerConfig.shared.shouldAutoPlay
 
-        // Превью показываем всегда (если есть), даже при автозапуске — чтобы убрать черный провал.
-        SYPlayerConfig.shared.log("Player show preview image", level: .debug)
-        controlView.showImageView(
-            url: resource.previewImage,
-            hideLoaderOnFinish: !shouldAutoPlay
-        )
+        SYPlayerConfig.shared.log("Player hide preview image", level: .debug)
+        controlView.hideImageView()
 
         if shouldAutoPlay {
             // Сразу начинаем
@@ -298,6 +297,28 @@ final class SYPlayer: UIView {
         )
         engine.set(url: video.url, autoPlay: autoPlay)
     }
+
+    private func prepareVideoForSmoothStart() {
+        didAnimateVideoFadeIn = false
+        playerLayer.layer.removeAllAnimations()
+        playerLayer.alpha = 0
+    }
+
+    private func revealVideoIfNeeded() {
+        guard !didAnimateVideoFadeIn else { return }
+        guard playerLayer.isReadyForDisplay else { return }
+        guard case .playing = engine.state else { return }
+
+        didAnimateVideoFadeIn = true
+        UIView.animate(
+            withDuration: 0.25,
+            delay: 0,
+            options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction]
+        ) { [weak self] in
+            guard let self else { return }
+            self.playerLayer.alpha = 1
+        }
+    }
 }
 
 // MARK: - SYPlayerEngineDelegate
@@ -312,6 +333,9 @@ extension SYPlayer: SYPlayerEngineDelegate {
 
         switch state {
         case .ready, .playing:
+            if case .playing = state {
+                revealVideoIfNeeded()
+            }
             if playerLayer.isReadyForDisplay {
                 controlView.hideImageView()
             }
