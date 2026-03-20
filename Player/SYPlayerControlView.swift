@@ -54,6 +54,7 @@ final class SYPlayerControlView: UIView {
 
     private var playerLastState: SYPlayerState = .idle
     private var isLoaderVisible = false
+    private var hasVisiblePlaybackStarted = false
 
     // MARK: - UI Elements
     private let mainMaskView = UIView()
@@ -142,7 +143,9 @@ final class SYPlayerControlView: UIView {
         )
         self.resource = resource
         self.selectedIndex = index
+        hasVisiblePlaybackStarted = false
         titleLabel.text = resource.name
+        showLoader()
         autoFadeOutControlViewWithAnimation()
     }
 
@@ -199,8 +202,12 @@ final class SYPlayerControlView: UIView {
 
                 playerLastState = state
 
-                if case .playing = state {
-                    hideLoader()
+                if hasVisiblePlaybackStarted {
+                    if case .playing = state {
+                        hideLoader()
+                    } else {
+                        showLoader()
+                    }
                 } else {
                     showLoader()
                 }
@@ -255,7 +262,7 @@ final class SYPlayerControlView: UIView {
         )
         guard let url else {
             imageView.image = nil
-            if hideLoaderOnFinish, case .playing = playerLastState {
+            if hideLoaderOnFinish, hasVisiblePlaybackStarted, case .playing = playerLastState {
                 hideLoader()
             }
             return
@@ -264,7 +271,7 @@ final class SYPlayerControlView: UIView {
         imageView.isHidden = false
         imageView.kf.setImage(with: url) { [weak self] _ in
             guard let self else { return }
-            if hideLoaderOnFinish, case .playing = playerLastState {
+            if hideLoaderOnFinish, hasVisiblePlaybackStarted, case .playing = playerLastState {
                 hideLoader()
             }
         }
@@ -290,7 +297,14 @@ final class SYPlayerControlView: UIView {
         SYPlayerConfig.shared.log("ControlView prepareToDealloc", level: .debug)
         delayItem?.cancel()
         delayItem = nil
+        hasVisiblePlaybackStarted = false
         setLoaderVisible(false, animated: false)
+    }
+
+    func playbackDidBecomeVisible() {
+        guard !hasVisiblePlaybackStarted else { return }
+        hasVisiblePlaybackStarted = true
+        hideLoader()
     }
 
     // MARK: - Loader
