@@ -173,9 +173,6 @@ final class SYPlayer: UIView {
 
         let shouldAutoPlay = SYPlayerConfig.shared.shouldAutoPlay
 
-        SYPlayerConfig.shared.log("Player hide preview image", level: .debug)
-        controlView.hideImageView()
-
         if shouldAutoPlay {
             // Сразу начинаем
             SYPlayerConfig.shared.log("Player autoPlay on setVideo", level: .debug)
@@ -310,6 +307,7 @@ final class SYPlayer: UIView {
         guard case .playing = engine.state else { return }
 
         didAnimateVideoFadeIn = true
+        controlView.playbackDidBecomeVisible()
         UIView.animate(
             withDuration: 0.25,
             delay: 0,
