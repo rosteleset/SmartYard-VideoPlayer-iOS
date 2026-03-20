@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name = "SmartYardVideoPlayer"
-  s.version = "0.1.6"
+  s.version = "0.1.7"
   s.summary = "SmartYard video player UI and playback components."
   s.description = <<-DESC
 SmartYardVideoPlayer provides a UIKit-based video player with archive/online playback,
