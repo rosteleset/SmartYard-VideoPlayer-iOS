@@ -74,4 +74,4 @@ SYPlayerConfig.shared.icons = icons
 See the project documentation and source for integration details.
 
 ## License
-GPL-3.0
+GNU General Public License v3.0. See [LICENSE](LICENSE).

@@ -7,7 +7,7 @@ SmartYardVideoPlayer provides a UIKit-based video player with archive/online pla
 HLS prefetching, caching, and customizable controls.
   DESC
   s.homepage = "https://github.com/rosteleset/SmartYard-VideoPlayer-iOS"
-  s.license = { :type => "GPL-3.0" }
+  s.license = { :type => "GPL-3.0", :file => "LICENSE" }
   s.author = { "SmartYard" => "https://sesameware.com" }
   s.source = {
     :git => 'https://github.com/rosteleset/SmartYard-VideoPlayer-iOS.git',
