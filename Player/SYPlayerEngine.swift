@@ -104,7 +104,12 @@ final class SYPlayerEngine {
 
         cleanupItemOnly()
 
-        let asset = AVURLAsset(url: url)
+        let asset: AVURLAsset
+        if let warmedAsset = SYPlayerAssetWarmupStore.shared.preparedAsset(for: url) {
+            asset = warmedAsset
+        } else {
+            asset = AVURLAsset(url: url)
+        }
         self.urlAsset = asset
 
         let newItem = AVPlayerItem(asset: asset)
