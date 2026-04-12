@@ -48,9 +48,9 @@ public final class SYPlayerAssetWarmupStore {
             asset.loadValuesAsynchronously(forKeys: keysToLoad) { [weak self] in
                 guard let self else { return }
                 queue.async {
-                    guard var entry = entries[key] else { return }
-                    entry.expiresAt = Date().addingTimeInterval(ttl)
-                    entries[key] = entry
+                    guard var entry = self.entries[key] else { return }
+                    entry.expiresAt = Date().addingTimeInterval(self.ttl)
+                    self.entries[key] = entry
                 }
             }
         }
