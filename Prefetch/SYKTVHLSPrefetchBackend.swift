@@ -41,6 +41,7 @@ final class SYKTVHLSPrefetchBackend: NSObject, SYHLSPrefetchBackend {
                 "KTVHLSPrefetch cancel \(url.absoluteString)",
                 level: .debug
             )
+            task.loader.delegate = nil
             task.loader.close()
             task.completion()
         }
@@ -54,6 +55,7 @@ final class SYKTVHLSPrefetchBackend: NSObject, SYHLSPrefetchBackend {
             let tasks = self.tasks
             self.tasks.removeAll()
             for (_, task) in tasks {
+                task.loader.delegate = nil
                 task.loader.close()
                 task.completion()
             }
@@ -73,8 +75,8 @@ extension SYKTVHLSPrefetchBackend: KTVHCDataHLSLoaderDelegate {
     }
 
     /// Called when an HLS loader fails.
-    func ktv_HLSLoader(_ loader: KTVHCDataHLSLoader, didFailWithError error: Error) {
-        let message = (error as NSError).localizedDescription
+    func ktv_HLSLoader(_ loader: KTVHCDataHLSLoader, didFailWithError error: Error!) {
+        let message = error.map { ($0 as NSError).localizedDescription } ?? "Unknown HLS loader error"
         SYPlayerConfig.shared.log(
             "KTVHLSPrefetch failed: \(message)",
             level: .error
@@ -135,6 +137,7 @@ extension SYKTVHLSPrefetchBackend: KTVHCDataHLSLoaderDelegate {
 
     /// Completes and removes a finished loader.
     private func finish(loader: KTVHCDataHLSLoader) {
+        loader.delegate = nil
         queue.async { [weak self] in
             guard let self,
                   let url = loader.object as? URL,
@@ -143,6 +146,7 @@ extension SYKTVHLSPrefetchBackend: KTVHCDataHLSLoaderDelegate {
                 "KTVHLSPrefetch cleanup \(url.absoluteString)",
                 level: .debug
             )
+            task.loader.close()
             task.completion()
         }
     }
