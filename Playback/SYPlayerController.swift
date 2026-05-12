@@ -36,6 +36,7 @@ public final class SYPlayerController {
     private let playerView = SYPlayer()
     private var resource: SYPlayerResource?
     private var currentContainer: UIView?
+    private var currentControlsContainer: UIView?
 
     private let disposeBag = DisposeBag()
 
@@ -87,22 +88,35 @@ public final class SYPlayerController {
     /// По умолчанию НЕ паузит — чтобы можно было "переезжать" в fullscreen без stop/start.
     /// Attaches the player view to a container.
     public func attach(to container: UIView, pauseBeforeDetach: Bool = false) {
-        if currentContainer === container {
+        attach(videoTo: container, controlsTo: nil, pauseBeforeDetach: pauseBeforeDetach)
+    }
+
+    /// Attaches video to one container and optionally keeps controls in a separate overlay container.
+    public func attach(
+        videoTo videoContainer: UIView,
+        controlsTo controlsContainer: UIView?,
+        pauseBeforeDetach: Bool = false
+    ) {
+        if currentContainer === videoContainer {
             SYPlayerConfig.shared.log("Controller attach skipped (already attached)", level: .debug)
+            currentControlsContainer = controlsContainer
+            playerView.setControlsContainer(controlsContainer)
             return
         }
 
         SYPlayerConfig.shared.log(
-            "Controller attach to container (pauseBeforeDetach: \(pauseBeforeDetach))",
+            "Controller attach to video container (externalControls: \(controlsContainer != nil), pauseBeforeDetach: \(pauseBeforeDetach))",
             level: .info
         )
         detach(pause: pauseBeforeDetach)
 
-        currentContainer = container
-        container.addSubview(playerView)
+        currentContainer = videoContainer
+        currentControlsContainer = controlsContainer
+        videoContainer.addSubview(playerView)
 
-        playerView.frame = container.bounds
+        playerView.frame = videoContainer.bounds
         playerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        playerView.setControlsContainer(controlsContainer)
 
         isAttachedRelay.accept(true)
     }
@@ -111,9 +125,12 @@ public final class SYPlayerController {
     /// pause=false — "перецепить" без дерготни.
     /// Detaches the player view from its current container.
     public func detach(pause: Bool = false) {
+        playerView.setControlsContainer(nil)
+
         guard playerView.superview != nil else {
             SYPlayerConfig.shared.log("Controller detach skipped (no superview)", level: .debug)
             currentContainer = nil
+            currentControlsContainer = nil
             isAttachedRelay.accept(false)
             return
         }
@@ -124,6 +141,7 @@ public final class SYPlayerController {
         playerView.removeFromSuperview()
         playerView.autoresizingMask = []
         currentContainer = nil
+        currentControlsContainer = nil
         isAttachedRelay.accept(false)
     }
 
@@ -148,6 +166,12 @@ public final class SYPlayerController {
     public func setMode(_ mode: SYPlayerUIMode) {
         SYPlayerConfig.shared.log("Controller setMode: \(mode)", level: .debug)
         playerView.setMode(mode)
+    }
+
+    /// Toggles control UI visibility.
+    public func toggleControlsVisibility() {
+        SYPlayerConfig.shared.log("Controller toggleControlsVisibility", level: .debug)
+        playerView.toggleControlsVisibility()
     }
 
     /// Mutes or unmutes the player.

@@ -292,6 +292,12 @@ final class SYPlayerControlView: UIView {
         isControlViewShowing.onNext(visible)
     }
 
+    /// Toggles controls visibility from an external tap surface.
+    func toggleControlsVisibility() {
+        if case .ended = playerLastState { return }
+        setControlsVisible(!isShowingControls)
+    }
+
     /// Cancels any delayed UI work.
     func prepareToDealloc() {
         SYPlayerConfig.shared.log("ControlView prepareToDealloc", level: .debug)
@@ -639,8 +645,7 @@ final class SYPlayerControlView: UIView {
 
     /// Toggles controls visibility on tap.
     @objc private func onTapGestureTapped(_: UIGestureRecognizer) {
-        if case .ended = playerLastState { return }
-        setControlsVisible(!isShowingControls)
+        toggleControlsVisibility()
     }
 
     /// Applies visibility changes with animations.

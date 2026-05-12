@@ -254,9 +254,32 @@ final class SYPlayer: UIView {
         controlView.setMode(mode)
     }
 
+    /// Toggles controls visibility from an external tap surface.
+    func toggleControlsVisibility() {
+        controlView.toggleControlsVisibility()
+    }
+
+    /// Moves controls to a separate container, or back to the player when container is nil.
+    func setControlsContainer(_ container: UIView?) {
+        let targetContainer = container ?? self
+        guard controlView.superview !== targetContainer else { return }
+
+        SYPlayerConfig.shared.log(
+            "Player setControlsContainer external: \(container != nil)",
+            level: .debug
+        )
+        controlView.removeFromSuperview()
+        targetContainer.addSubview(controlView)
+        controlView.snp.remakeConstraints {
+            $0.directionalEdges.equalToSuperview()
+        }
+        controlView.updateUI(isPortrait: isPortrait)
+    }
+
     /// Releases resources and observers before deallocation.
     func prepareToDealloc() {
         SYPlayerConfig.shared.log("Player prepareToDealloc", level: .info)
+        setControlsContainer(nil)
         engine.cleanup()
         playerLayer.detachPlayer()
         controlView.prepareToDealloc()
