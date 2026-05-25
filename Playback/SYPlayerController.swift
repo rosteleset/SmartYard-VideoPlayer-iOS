@@ -168,6 +168,45 @@ public final class SYPlayerController {
         playerView.setMode(mode)
     }
 
+    /// Replaces the right-side vertical accessory controls.
+    public func setRightAccessoryItems(_ items: [SYPlayerControlAccessoryItem]) {
+        SYPlayerConfig.shared.log(
+            "Controller setRightAccessoryItems count: \(items.count)",
+            level: .debug
+        )
+        playerView.setRightAccessoryItems(items)
+    }
+
+    /// Updates a right-side accessory control by id.
+    public func updateRightAccessoryItem(
+        id: String,
+        _ update: (inout SYPlayerControlAccessoryItem) -> Void
+    ) {
+        SYPlayerConfig.shared.log("Controller updateRightAccessoryItem id: \(id)", level: .debug)
+        playerView.updateRightAccessoryItem(id: id, update)
+    }
+
+    /// Removes a right-side accessory control by id.
+    public func removeRightAccessoryItem(id: String) {
+        SYPlayerConfig.shared.log("Controller removeRightAccessoryItem id: \(id)", level: .debug)
+        playerView.removeRightAccessoryItem(id: id)
+    }
+
+    /// Removes all right-side accessory controls.
+    public func removeAllRightAccessoryItems() {
+        SYPlayerConfig.shared.log("Controller removeAllRightAccessoryItems", level: .debug)
+        playerView.removeAllRightAccessoryItems()
+    }
+
+    /// Enables or disables automatic hiding of controls while playback is active.
+    public func setControlsAutoHideEnabled(_ isEnabled: Bool) {
+        SYPlayerConfig.shared.log(
+            "Controller setControlsAutoHideEnabled: \(isEnabled)",
+            level: .debug
+        )
+        playerView.setControlsAutoHideEnabled(isEnabled)
+    }
+
     /// Toggles control UI visibility.
     public func toggleControlsVisibility() {
         SYPlayerConfig.shared.log("Controller toggleControlsVisibility", level: .debug)

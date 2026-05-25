@@ -254,6 +254,34 @@ final class SYPlayer: UIView {
         controlView.setMode(mode)
     }
 
+    /// Replaces the right-side vertical accessory controls.
+    func setRightAccessoryItems(_ items: [SYPlayerControlAccessoryItem]) {
+        controlView.setRightAccessoryItems(items)
+    }
+
+    /// Updates a right-side accessory control by id.
+    func updateRightAccessoryItem(
+        id: String,
+        _ update: (inout SYPlayerControlAccessoryItem) -> Void
+    ) {
+        controlView.updateRightAccessoryItem(id: id, update)
+    }
+
+    /// Removes a right-side accessory control by id.
+    func removeRightAccessoryItem(id: String) {
+        controlView.removeRightAccessoryItem(id: id)
+    }
+
+    /// Removes all right-side accessory controls.
+    func removeAllRightAccessoryItems() {
+        controlView.removeAllRightAccessoryItems()
+    }
+
+    /// Enables or disables automatic hiding of controls while playback is active.
+    func setControlsAutoHideEnabled(_ isEnabled: Bool) {
+        controlView.setControlsAutoHideEnabled(isEnabled)
+    }
+
     /// Toggles controls visibility from an external tap surface.
     func toggleControlsVisibility() {
         controlView.toggleControlsVisibility()

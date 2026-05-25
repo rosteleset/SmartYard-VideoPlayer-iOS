@@ -18,6 +18,12 @@ import TouchAreaInsets
 extension SYPlayerControlView {
     enum ButtonType: Int { case play, pause, favourite, fullscreenToggle }
     typealias Mode = SYPlayerUIMode
+
+    private enum Layout {
+        static let sideAccessoryButtonSize: CGFloat = 36
+        static let sideAccessorySpacing: CGFloat = 12
+        static let sideAccessoryTopOffset: CGFloat = 24
+    }
 }
 
 protocol SYPlayerControlViewDelegate: AnyObject {
@@ -55,6 +61,9 @@ final class SYPlayerControlView: UIView {
     private var playerLastState: SYPlayerState = .idle
     private var isLoaderVisible = false
     private var hasVisiblePlaybackStarted = false
+    private var isControlsAutoHideEnabled = true
+    private var rightAccessoryItems: [SYPlayerControlAccessoryItem] = []
+    private var rightAccessoryButtons: [String: UIButton] = [:]
 
     // MARK: - UI Elements
     private let mainMaskView = UIView()
@@ -67,6 +76,7 @@ final class SYPlayerControlView: UIView {
     private let titleLabel = UILabel()
     private let fullscreenButton = UIButton(type: .custom)
     private let soundToggleButton = UIButton(type: .custom)
+    private let rightAccessoryStackView = UIStackView()
 
     private let videoLoadingAnimationView = LottieAnimationView()
 
@@ -133,6 +143,45 @@ final class SYPlayerControlView: UIView {
         self.mode = mode
         updateTitleVisibility()
         fullscreenButton.isSelected = mode == .fullscreen
+    }
+
+    func setRightAccessoryItems(_ items: [SYPlayerControlAccessoryItem]) {
+        rightAccessoryItems = items
+        rebuildRightAccessoryStack()
+    }
+
+    func updateRightAccessoryItem(
+        id: String,
+        _ update: (inout SYPlayerControlAccessoryItem) -> Void
+    ) {
+        guard let index = rightAccessoryItems.firstIndex(where: { $0.id == id }) else { return }
+
+        update(&rightAccessoryItems[index])
+        configureRightAccessoryButton(
+            rightAccessoryButtons[id],
+            with: rightAccessoryItems[index]
+        )
+    }
+
+    func removeRightAccessoryItem(id: String) {
+        rightAccessoryItems.removeAll { $0.id == id }
+        rebuildRightAccessoryStack()
+    }
+
+    func removeAllRightAccessoryItems() {
+        rightAccessoryItems.removeAll()
+        rebuildRightAccessoryStack()
+    }
+
+    func setControlsAutoHideEnabled(_ isEnabled: Bool) {
+        isControlsAutoHideEnabled = isEnabled
+
+        if isEnabled {
+            autoFadeOutControlViewWithAnimation()
+        } else {
+            cancelAutoFadeOutAnimation()
+            setControlsVisible(true)
+        }
     }
 
     /// Prepares UI for a resource and selected index.
@@ -295,6 +344,10 @@ final class SYPlayerControlView: UIView {
     /// Toggles controls visibility from an external tap surface.
     func toggleControlsVisibility() {
         if case .ended = playerLastState { return }
+        guard isControlsAutoHideEnabled else {
+            setControlsVisible(true)
+            return
+        }
         setControlsVisible(!isShowingControls)
     }
 
@@ -383,6 +436,10 @@ final class SYPlayerControlView: UIView {
     /// Schedules auto-hide for controls if playing.
     private func autoFadeOutControlViewWithAnimation() {
         cancelAutoFadeOutAnimation()
+        guard isControlsAutoHideEnabled else {
+            setControlsVisible(true)
+            return
+        }
 
         delayItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -429,6 +486,12 @@ final class SYPlayerControlView: UIView {
         soundToggleButton.imageForSelected = SYPlayerConfig.shared.icon(.soundOn)
         soundToggleButton.touchAreaInsets = UIEdgeInsets(inset: 12)
         soundToggleButton.isHidden = !hasSound
+
+        rightAccessoryStackView.axis = .vertical
+        rightAccessoryStackView.alignment = .fill
+        rightAccessoryStackView.distribution = .fill
+        rightAccessoryStackView.spacing = Layout.sideAccessorySpacing
+        rightAccessoryStackView.isHidden = true
 
         let animation = LottieAnimation.named("LoaderAnimation", bundle: .syPlayer)
         videoLoadingAnimationView.animation = animation
@@ -499,12 +562,14 @@ final class SYPlayerControlView: UIView {
         topView.addSubview(fullscreenButton)
         topView.addSubview(soundToggleButton)
         topView.addSubview(titleLabel)
+        mainView.addSubview(rightAccessoryStackView)
 
         mainMaskView.snp.makeConstraints { $0.directionalEdges.equalToSuperview() }
         mainView.snp.makeConstraints { $0.directionalEdges.equalTo(safeAreaLayoutGuide) }
         imageView.snp.makeConstraints { $0.directionalEdges.equalTo(mainView) }
 
         topView.snp.makeConstraints {
+            $0.top.equalToSuperview()
             $0.left.right.equalToSuperview()
             $0.height.equalTo(44)
         }
@@ -519,6 +584,12 @@ final class SYPlayerControlView: UIView {
             $0.centerY.equalToSuperview()
             $0.left.equalToSuperview().inset(16)
             $0.width.height.equalTo(32)
+        }
+
+        rightAccessoryStackView.snp.makeConstraints {
+            $0.top.equalTo(fullscreenButton.snp.bottom).offset(Layout.sideAccessoryTopOffset)
+            $0.centerX.equalTo(fullscreenButton)
+            $0.width.equalTo(Layout.sideAccessoryButtonSize)
         }
 
         titleLabel.snp.makeConstraints {
@@ -643,6 +714,11 @@ final class SYPlayerControlView: UIView {
         delegate?.controlView(controlView: self, didPressButton: button)
     }
 
+    @objc private func onRightAccessoryButtonTapped(_ sender: UIButton) {
+        guard let id = sender.accessibilityIdentifier else { return }
+        rightAccessoryItems.first { $0.id == id }?.action?()
+    }
+
     /// Toggles controls visibility on tap.
     @objc private func onTapGestureTapped(_: UIGestureRecognizer) {
         toggleControlsVisibility()
@@ -681,6 +757,92 @@ final class SYPlayerControlView: UIView {
         } else {
             titleLabel.isHidden = false
         }
+    }
+
+    private func rebuildRightAccessoryStack() {
+        rightAccessoryStackView.arrangedSubviews.forEach { view in
+            rightAccessoryStackView.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        rightAccessoryButtons.removeAll()
+        rightAccessoryStackView.isHidden = rightAccessoryItems.isEmpty
+
+        rightAccessoryItems.forEach { item in
+            let button = UIButton(type: .custom)
+            button.accessibilityIdentifier = item.id
+            button.imageView?.contentMode = .scaleAspectFit
+            button.adjustsImageWhenHighlighted = true
+            button.touchAreaInsets = UIEdgeInsets(inset: 12)
+            button.addTarget(
+                self,
+                action: #selector(onRightAccessoryButtonTapped(_:)),
+                for: .touchUpInside
+            )
+
+            configureRightAccessoryButton(button, with: item)
+            rightAccessoryButtons[item.id] = button
+            rightAccessoryStackView.addArrangedSubview(button)
+
+            button.snp.makeConstraints {
+                $0.width.height.equalTo(Layout.sideAccessoryButtonSize)
+            }
+        }
+    }
+
+    private func configureRightAccessoryButton(
+        _ button: UIButton?,
+        with item: SYPlayerControlAccessoryItem
+    ) {
+        guard let button else { return }
+
+        button.setImage(item.image, for: .normal)
+        button.setImage(item.selectedImage ?? item.image, for: .selected)
+        button.setImage(item.disabledImage ?? item.image, for: .disabled)
+        button.setImage(
+            item.selectedImage ?? item.disabledImage ?? item.image,
+            for: [.selected, .disabled]
+        )
+        button.isEnabled = item.isEnabled
+        button.isSelected = item.isSelected
+        button.accessibilityLabel = item.accessibilityLabel
+
+        let colors = SYPlayerConfig.shared.colors
+        let appearance = item.appearance
+        let defaultTintColor = colors.controlsTintColor
+        let tintColor: UIColor
+
+        if !item.isEnabled {
+            tintColor = appearance.disabledTintColor ?? defaultTintColor.withAlphaComponent(0.5)
+        } else if item.isSelected {
+            tintColor = appearance.selectedTintColor ?? appearance.tintColor ?? defaultTintColor
+        } else {
+            tintColor = appearance.tintColor ?? defaultTintColor
+        }
+
+        let backgroundColor: UIColor?
+        if !item.isEnabled {
+            backgroundColor = appearance.disabledBackgroundColor ?? appearance.backgroundColor
+        } else if item.isSelected {
+            backgroundColor = appearance.selectedBackgroundColor ?? appearance.backgroundColor
+        } else {
+            backgroundColor = appearance.backgroundColor
+        }
+
+        let borderColor: UIColor?
+        if !item.isEnabled {
+            borderColor = appearance.disabledBorderColor ?? appearance.borderColor
+        } else if item.isSelected {
+            borderColor = appearance.selectedBorderColor ?? appearance.borderColor
+        } else {
+            borderColor = appearance.borderColor
+        }
+
+        button.tintColor = tintColor
+        button.backgroundColor = backgroundColor ?? .clear
+        button.layer.cornerRadius = appearance.cornerRadius
+        button.layer.borderWidth = appearance.borderWidth
+        button.layer.borderColor = borderColor?.cgColor
     }
 }
 
