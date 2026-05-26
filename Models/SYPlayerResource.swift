@@ -9,6 +9,11 @@
 import Foundation
 import AVFoundation
 
+public enum SYPlayerResourceSource {
+    case hls(URL)
+    case whep(endpointURL: URL, iceServers: [String])
+}
+
 public struct SYPlayerResource {
     public let videos: [SYPlayerResourceVideo]
     public let previewImage: URL?
@@ -17,7 +22,7 @@ public struct SYPlayerResource {
     public let hasSound: Bool
 
     /// Creates a resource with multiple video variants.
-    init(
+    public init(
         videos: [SYPlayerResourceVideo],
         previewImage: URL? = nil,
         name: String = "",
@@ -57,6 +62,7 @@ public struct SYPlayerResource {
 
 public final class SYPlayerResourceVideo {
     public let url: URL
+    public let source: SYPlayerResourceSource
     public var options: [String: Any]?
 
     /// Builds an AVURLAsset using the current player configuration.
@@ -67,6 +73,13 @@ public final class SYPlayerResourceVideo {
     /// Creates a video wrapper with the given URL and optional AVURLAsset options.
     public init(url: URL, options: [String: Any]? = nil) {
         self.url = url
+        self.source = .hls(url)
         self.options = options
+    }
+
+    public init(whepEndpointURL: URL, iceServers: [String] = []) {
+        self.url = whepEndpointURL
+        self.source = .whep(endpointURL: whepEndpointURL, iceServers: iceServers)
+        self.options = nil
     }
 }

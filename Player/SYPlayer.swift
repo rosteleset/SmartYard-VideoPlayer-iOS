@@ -54,7 +54,10 @@ final class SYPlayer: UIView {
     var selectFavoriteBlock: (() -> Void)?
 
     var videoGravity: AVLayerVideoGravity = .resizeAspect {
-        didSet { playerLayer.videoGravity = videoGravity }
+        didSet {
+            playerLayer.videoGravity = videoGravity
+            webRTCEngine.rendererView.videoContentMode = rtcVideoContentMode
+        }
     }
 
     var aspectRatio: SYPlayerAspectRatio {
@@ -63,12 +66,13 @@ final class SYPlayer: UIView {
     }
 
     /// Текущее состояние проигрывания
-    var isPlaying: Bool { engine.isPlaying }
+    var isPlaying: Bool { isCurrentVideoWHEP ? webRTCEngine.isPlaying : engine.isPlaying }
 
     // MARK: - Private UI
     private let playerLayer = SYPlayerLayerView()
     private let controlView = SYPlayerControlView()
     private let engine = SYPlayerEngine()
+    private let webRTCEngine = SYWebRTCPlayerEngine()
 
     // MARK: - Private state
     private var resource: SYPlayerResource?
@@ -80,6 +84,22 @@ final class SYPlayer: UIView {
     private var didAnimateVideoFadeIn: Bool = false
 
     private var isPortrait: Bool { bounds.height > bounds.width }
+    private var currentVideo: SYPlayerResourceVideo? { resource?.video(at: currentVideoIndex) }
+    private var isCurrentVideoWHEP: Bool {
+        guard let currentVideo else { return false }
+        if case .whep = currentVideo.source { return true }
+        return false
+    }
+    private var rtcVideoContentMode: UIView.ContentMode {
+        switch videoGravity {
+        case .resizeAspectFill:
+            return .scaleAspectFill
+        case .resize:
+            return .scaleToFill
+        default:
+            return .scaleAspectFit
+        }
+    }
 
     // MARK: - Init
     /// Creates the player with a frame.
@@ -106,9 +126,16 @@ final class SYPlayer: UIView {
 
         playerLayer.videoGravity = videoGravity
         playerLayer.attach(player: engine.player)
-        insertSubview(playerLayer, at: 0)
+        addSubview(playerLayer)
+        addSubview(webRTCEngine.rendererView)
 
         playerLayer.snp.makeConstraints {
+            $0.directionalEdges.equalToSuperview()
+        }
+
+        webRTCEngine.rendererView.isHidden = true
+        webRTCEngine.rendererView.videoContentMode = rtcVideoContentMode
+        webRTCEngine.rendererView.snp.makeConstraints {
             $0.directionalEdges.equalToSuperview()
         }
 
@@ -138,6 +165,7 @@ final class SYPlayer: UIView {
         )
 
         engine.delegate = self
+        webRTCEngine.delegate = self
     }
 
     // MARK: - Public API
@@ -148,6 +176,7 @@ final class SYPlayer: UIView {
             level: .info
         )
         engine.stop()
+        webRTCEngine.stop()
         self.resource = resource
         currentVideoIndex = videoIndex
 
@@ -212,6 +241,9 @@ final class SYPlayer: UIView {
 
         if !isItemLoaded {
             startCurrentVideo(autoPlay: true)
+        } else if isCurrentVideoWHEP {
+            SYPlayerConfig.shared.log("Player play existing WHEP item", level: .debug)
+            webRTCEngine.play()
         } else {
             SYPlayerConfig.shared.log("Player play existing item", level: .debug)
             engine.play()
@@ -223,7 +255,7 @@ final class SYPlayer: UIView {
     /// Pauses playback; if allowAutoPlay is true, treat it as temporary.
     func pause(allowAutoPlay allow: Bool = false) {
         SYPlayerConfig.shared.log("Player pause (allowAutoPlay: \(allow))", level: .debug)
-        engine.pause()
+        isCurrentVideoWHEP ? webRTCEngine.pause() : engine.pause()
         engine.player.isMuted = allow ? engine.player.isMuted : true
         isPauseByUser = !allow
     }
@@ -241,6 +273,7 @@ final class SYPlayer: UIView {
     /// Mutes or unmutes the underlying player.
     func setMuted(_ muted: Bool) {
         SYPlayerConfig.shared.log("Player setMuted: \(muted)", level: .debug)
+        guard !isCurrentVideoWHEP else { return }
         engine.player.isMuted = muted
     }
 
@@ -309,6 +342,7 @@ final class SYPlayer: UIView {
         SYPlayerConfig.shared.log("Player prepareToDealloc", level: .info)
         setControlsContainer(nil)
         engine.cleanup()
+        webRTCEngine.cleanup()
         playerLayer.detachPlayer()
         controlView.prepareToDealloc()
     }
@@ -338,18 +372,41 @@ final class SYPlayer: UIView {
         }
 
         isItemLoaded = true
-        playerLayer.attach(player: engine.player)
         SYPlayerConfig.shared.log(
             "Player startCurrentVideo url: \(video.url.absoluteString), autoPlay: \(autoPlay)",
             level: .info
         )
-        engine.set(url: video.url, autoPlay: autoPlay)
+
+        switch video.source {
+        case .hls(let url):
+            startHLSVideo(url: url, autoPlay: autoPlay)
+        case .whep(let endpointURL, let iceServers):
+            startWHEPVideo(endpointURL: endpointURL, iceServers: iceServers, autoPlay: autoPlay)
+        }
+    }
+
+    private func startHLSVideo(url: URL, autoPlay: Bool) {
+        webRTCEngine.stop()
+        webRTCEngine.rendererView.isHidden = true
+        playerLayer.isHidden = false
+        playerLayer.attach(player: engine.player)
+        engine.set(url: url, autoPlay: autoPlay)
+    }
+
+    private func startWHEPVideo(endpointURL: URL, iceServers: [String], autoPlay: Bool) {
+        engine.stop()
+        playerLayer.detachPlayer()
+        playerLayer.isHidden = true
+        webRTCEngine.rendererView.isHidden = false
+        webRTCEngine.set(endpointURL: endpointURL, iceServers: iceServers, autoPlay: autoPlay)
     }
 
     private func prepareVideoForSmoothStart() {
         didAnimateVideoFadeIn = false
         playerLayer.layer.removeAllAnimations()
         playerLayer.alpha = 0
+        webRTCEngine.rendererView.layer.removeAllAnimations()
+        webRTCEngine.rendererView.alpha = 0
     }
 
     private func revealVideoIfNeeded() {
@@ -367,6 +424,38 @@ final class SYPlayer: UIView {
             guard let self else { return }
             self.playerLayer.alpha = 1
         }
+    }
+
+    private func revealWebRTCVideoIfNeeded() {
+        guard !didAnimateVideoFadeIn else { return }
+
+        didAnimateVideoFadeIn = true
+        controlView.playbackDidBecomeVisible()
+        UIView.animate(
+            withDuration: 0.25,
+            delay: 0,
+            options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction]
+        ) { [weak self] in
+            self?.webRTCEngine.rendererView.alpha = 1
+        }
+    }
+
+    private func fallbackToNextVideoIfPossible() -> Bool {
+        guard let resource,
+              currentVideoIndex + 1 < resource.videos.count
+        else {
+            return false
+        }
+
+        currentVideoIndex += 1
+        isItemLoaded = false
+        prepareVideoForSmoothStart()
+        SYPlayerConfig.shared.log(
+            "Player fallback to video index \(currentVideoIndex)",
+            level: .warning
+        )
+        startCurrentVideo(autoPlay: true)
+        return true
     }
 }
 
@@ -391,7 +480,11 @@ extension SYPlayer: SYPlayerEngineDelegate {
             if case .ready = state { isPlayToTheEnd = false }
         case .ended:
             isPlayToTheEnd = true
-        case .error, .idle:
+        case .error:
+            if !fallbackToNextVideoIfPossible() {
+                isPlayToTheEnd = false
+            }
+        case .idle:
             isPlayToTheEnd = false
         default:
             break
@@ -434,6 +527,45 @@ extension SYPlayer: SYPlayerEngineDelegate {
     }
 }
 
+// MARK: - SYWebRTCPlayerEngineDelegate
+extension SYPlayer: SYWebRTCPlayerEngineDelegate {
+    func webRTCPlayerEngine(
+        _ engine: SYWebRTCPlayerEngine,
+        stateDidChange state: SYPlayerState
+    ) {
+        if case .error = state, fallbackToNextVideoIfPossible() {
+            return
+        }
+
+        controlView.playerStateDidChange(state: state)
+        delegate?.syPlayer(player: self, playerStateDidChange: state)
+
+        switch state {
+        case .playing:
+            controlView.hideImageView()
+            controlView.playbackDidBecomeVisible()
+            revealWebRTCVideoIfNeeded()
+            isPlayToTheEnd = false
+        case .ready:
+            isPlayToTheEnd = false
+        case .ended:
+            isPlayToTheEnd = true
+        case .error, .idle:
+            isPlayToTheEnd = false
+        default:
+            break
+        }
+    }
+
+    func webRTCPlayerEngine(
+        _ engine: SYWebRTCPlayerEngine,
+        isPlayingDidChange isPlaying: Bool
+    ) {
+        controlView.playStateDidChange(isPlaying: isPlaying)
+        delegate?.syPlayer(player: self, playerIsPlaying: isPlaying)
+    }
+}
+
 // MARK: - SYPlayerControlViewDelegate
 extension SYPlayer: SYPlayerControlViewDelegate {
 
@@ -442,6 +574,7 @@ extension SYPlayer: SYPlayerControlViewDelegate {
         controlView: SYPlayerControlView,
         didChangeVideoPlaybackRate rate: Float
     ) {
+        guard !isCurrentVideoWHEP else { return }
         engine.player.rate = rate
     }
 
