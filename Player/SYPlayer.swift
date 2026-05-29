@@ -602,7 +602,6 @@ extension SYPlayer: SYPlayerControlViewDelegate {
             break
 
         case .fullscreenToggle:
-            prepareToDealloc()
             backBlock?()
         }
     }
