@@ -8,6 +8,72 @@
 
 import Foundation
 import AVFoundation
+import UIKit
+
+public struct SYPlayerTransportAppearance {
+    public var webRTCColor: UIColor
+    public var hlsColor: UIColor
+    public var playingColor: UIColor
+    public var warningColor: UIColor
+    public var errorColor: UIColor
+    public var badgeBackgroundColor: UIColor
+    public var messageBackgroundColor: UIColor
+    public var textColor: UIColor
+    public var badgeFont: UIFont
+    public var messageFont: UIFont
+
+    public init(
+        webRTCColor: UIColor = UIColor(red: 0.18, green: 0.78, blue: 1.0, alpha: 1.0),
+        hlsColor: UIColor = UIColor(red: 1.0, green: 0.64, blue: 0.20, alpha: 1.0),
+        playingColor: UIColor = UIColor(red: 0.28, green: 0.84, blue: 0.48, alpha: 1.0),
+        warningColor: UIColor = UIColor(red: 1.0, green: 0.76, blue: 0.24, alpha: 1.0),
+        errorColor: UIColor = UIColor(red: 1.0, green: 0.31, blue: 0.31, alpha: 1.0),
+        badgeBackgroundColor: UIColor = UIColor.black.withAlphaComponent(0.52),
+        messageBackgroundColor: UIColor = UIColor.black.withAlphaComponent(0.76),
+        textColor: UIColor = .white,
+        badgeFont: UIFont = .systemFont(ofSize: 12, weight: .semibold),
+        messageFont: UIFont = .systemFont(ofSize: 14, weight: .medium)
+    ) {
+        self.webRTCColor = webRTCColor
+        self.hlsColor = hlsColor
+        self.playingColor = playingColor
+        self.warningColor = warningColor
+        self.errorColor = errorColor
+        self.badgeBackgroundColor = badgeBackgroundColor
+        self.messageBackgroundColor = messageBackgroundColor
+        self.textColor = textColor
+        self.badgeFont = badgeFont
+        self.messageFont = messageFont
+    }
+}
+
+public struct SYPlayerTransportStrings {
+    public var connectingWebRTC: String
+    public var connectingHLS: String
+    public var switchingToHLS: String
+    public var connectedHLS: String
+    public var videoUnavailable: String
+    public var webRTCInfo: String
+    public var hlsInfo: String
+
+    public init(
+        connectingWebRTC: String = "Connecting via WebRTC…",
+        connectingHLS: String = "Connecting via HLS…",
+        switchingToHLS: String = "WebRTC is unavailable. Connecting via HLS…",
+        connectedHLS: String = "Connected via HLS",
+        videoUnavailable: String = "Unable to load video",
+        webRTCInfo: String = "Video is delivered via WebRTC. This method usually provides lower latency.",
+        hlsInfo: String = "HLS uses buffering, which can smooth brief network interruptions. A delay from real time is possible."
+    ) {
+        self.connectingWebRTC = connectingWebRTC
+        self.connectingHLS = connectingHLS
+        self.switchingToHLS = switchingToHLS
+        self.connectedHLS = connectedHLS
+        self.videoUnavailable = videoUnavailable
+        self.webRTCInfo = webRTCInfo
+        self.hlsInfo = hlsInfo
+    }
+}
 
 public enum SYPlayerLogLevel: Int {
     case critical = 0
@@ -56,6 +122,8 @@ public final class SYPlayerConfig {
     public var icons: SYPlayerIcons = SYPlayerIcons()
     public var colors: SYPlayerColors = SYPlayerColors()
     public var fonts: SYPlayerFonts = SYPlayerFonts()
+    public var transportAppearance = SYPlayerTransportAppearance()
+    public var transportStrings = SYPlayerTransportStrings()
 
     // MARK: - Calendar
 

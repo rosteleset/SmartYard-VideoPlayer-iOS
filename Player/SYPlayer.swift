@@ -82,6 +82,7 @@ final class SYPlayer: UIView {
     private var isPlayToTheEnd: Bool = false
     private var isItemLoaded: Bool = false
     private var didAnimateVideoFadeIn: Bool = false
+    private var isFallbackPlayback = false
 
     private var isPortrait: Bool { bounds.height > bounds.width }
     private var currentVideo: SYPlayerResourceVideo? { resource?.video(at: currentVideoIndex) }
@@ -184,6 +185,7 @@ final class SYPlayer: UIView {
         isPlayToTheEnd = false
         isItemLoaded = false
         isPauseByUser = false
+        isFallbackPlayback = false
         prepareVideoForSmoothStart()
 
         controlView.configure(videoType: resource.videoType, hasSound: resource.hasSound)
@@ -386,6 +388,13 @@ final class SYPlayer: UIView {
     }
 
     private func startHLSVideo(url: URL, autoPlay: Bool) {
+        if resource?.videoType == .online {
+            controlView.setTransportState(
+                isFallbackPlayback ? .switchingToHLS : .connecting(.hls)
+            )
+        } else {
+            controlView.setTransportState(.hidden)
+        }
         webRTCEngine.stop()
         webRTCEngine.rendererView.isHidden = true
         playerLayer.isHidden = false
@@ -394,6 +403,8 @@ final class SYPlayer: UIView {
     }
 
     private func startWHEPVideo(endpointURL: URL, iceServers: [String], autoPlay: Bool) {
+        isFallbackPlayback = false
+        controlView.setTransportState(.connecting(.webRTC))
         engine.stop()
         playerLayer.detachPlayer()
         playerLayer.isHidden = true
@@ -442,12 +453,21 @@ final class SYPlayer: UIView {
 
     private func fallbackToNextVideoIfPossible() -> Bool {
         guard let resource,
+              let currentVideo,
               currentVideoIndex + 1 < resource.videos.count
         else {
             return false
         }
 
         currentVideoIndex += 1
+        let nextVideo = resource.videos[currentVideoIndex]
+        if case .whep = currentVideo.source,
+           case .hls = nextVideo.source {
+            isFallbackPlayback = true
+            controlView.setTransportState(.switchingToHLS)
+        } else {
+            isFallbackPlayback = false
+        }
         isItemLoaded = false
         prepareVideoForSmoothStart()
         SYPlayerConfig.shared.log(
@@ -466,12 +486,22 @@ extension SYPlayer: SYPlayerEngineDelegate {
         _ engine: SYPlayerEngine,
         stateDidChange state: SYPlayerState
     ) {
+        if case .error = state, fallbackToNextVideoIfPossible() {
+            return
+        }
+
         controlView.playerStateDidChange(state: state)
         delegate?.syPlayer(player: self, playerStateDidChange: state)
 
         switch state {
         case .ready, .playing:
             if case .playing = state {
+                if resource?.videoType == .online {
+                    controlView.setTransportState(
+                        .playing(.hls, announceConnection: isFallbackPlayback)
+                    )
+                }
+                isFallbackPlayback = false
                 revealVideoIfNeeded()
             }
             if playerLayer.isReadyForDisplay {
@@ -481,9 +511,11 @@ extension SYPlayer: SYPlayerEngineDelegate {
         case .ended:
             isPlayToTheEnd = true
         case .error:
-            if !fallbackToNextVideoIfPossible() {
-                isPlayToTheEnd = false
+            if resource?.videoType == .online {
+                controlView.setTransportState(.failed(.hls))
             }
+            isFallbackPlayback = false
+            isPlayToTheEnd = false
         case .idle:
             isPlayToTheEnd = false
         default:
@@ -542,6 +574,9 @@ extension SYPlayer: SYWebRTCPlayerEngineDelegate {
 
         switch state {
         case .playing:
+            controlView.setTransportState(
+                .playing(.webRTC, announceConnection: false)
+            )
             controlView.hideImageView()
             controlView.playbackDidBecomeVisible()
             revealWebRTCVideoIfNeeded()
@@ -551,6 +586,9 @@ extension SYPlayer: SYWebRTCPlayerEngineDelegate {
         case .ended:
             isPlayToTheEnd = true
         case .error, .idle:
+            if case .error = state {
+                controlView.setTransportState(.failed(.webRTC))
+            }
             isPlayToTheEnd = false
         default:
             break

@@ -8,6 +8,37 @@
 
 import Foundation
 
+enum SYPlayerTransport: Equatable {
+    case webRTC
+    case hls
+
+    var title: String {
+        switch self {
+        case .webRTC: return "WebRTC"
+        case .hls: return "HLS"
+        }
+    }
+}
+
+enum SYPlayerTransportState: Equatable {
+    case hidden
+    case connecting(SYPlayerTransport)
+    case playing(SYPlayerTransport, announceConnection: Bool)
+    case switchingToHLS
+    case failed(SYPlayerTransport)
+
+    var transport: SYPlayerTransport? {
+        switch self {
+        case .hidden:
+            return nil
+        case .connecting(let transport), .playing(let transport, _), .failed(let transport):
+            return transport
+        case .switchingToHLS:
+            return .hls
+        }
+    }
+}
+
 public enum SYPlayerState: Equatable {
     case idle
     case preparing
