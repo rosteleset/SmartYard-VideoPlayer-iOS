@@ -273,8 +273,8 @@ final class SYPlayer: UIView {
     /// Mutes or unmutes the underlying player.
     func setMuted(_ muted: Bool) {
         SYPlayerConfig.shared.log("Player setMuted: \(muted)", level: .debug)
-        guard !isCurrentVideoWHEP else { return }
         engine.player.isMuted = muted
+        webRTCEngine.setMuted(muted)
     }
 
     /// Updates UI layout for the given orientation.
