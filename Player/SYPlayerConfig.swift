@@ -126,6 +126,18 @@ public final class SYPlayerConfig {
     /// Maximum time to receive the first video frame after the WHEP handshake.
     public var whepFirstFrameTimeout: TimeInterval = 1.25
 
+    /// Time without live HLS progress before attempting recovery.
+    public var liveHLSStallRecoveryTimeout: TimeInterval = 2.5
+
+    /// Distance from the live edge used when recovering stalled HLS playback.
+    public var liveHLSRecoveryLiveEdgeOffset: TimeInterval = 6
+
+    /// Time allowed for a recovery seek before recreating the live HLS item.
+    public var liveHLSPostSeekRecoveryTimeout: TimeInterval = 0.75
+
+    /// Maximum recovery actions for one continuous live HLS stall.
+    public var liveHLSMaxStallRecoveryAttempts: Int = 2
+
     // MARK: - Assets
 
     public var icons: SYPlayerIcons = SYPlayerIcons()

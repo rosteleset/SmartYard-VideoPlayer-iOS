@@ -47,7 +47,12 @@ final class SYPlayerEngine {
     private var isUsingWarmedAsset = false
     private var currentURL: URL?
     private var currentAutoPlay = true
+    private var isLiveHLS = false
+    private var shouldPlay = false
+    private var hasStartedPlayback = false
     private var didRetryWithFreshAsset = false
+    private var stallRecoveryAttempts = 0
+    private var stallRecoveryWorkItem: DispatchWorkItem?
 
     // Time observer token
     private var timeObserverToken: Any?
@@ -58,7 +63,7 @@ final class SYPlayerEngine {
     private var bufferEmptyObs: NSKeyValueObservation?
     private var keepUpObs: NSKeyValueObservation?
 
-    private var playerRateObs: NSKeyValueObservation?
+    private var playerTimeControlStatusObs: NSKeyValueObservation?
 
     private var pendingSeek: TimeInterval?
 
@@ -99,14 +104,22 @@ final class SYPlayerEngine {
     // MARK: - Public API
 
     /// Loads a URL into the player and optionally starts playback.
-    func set(url: URL, autoPlay: Bool = true) {
+    func set(
+        url: URL,
+        autoPlay: Bool = true,
+        isLiveHLS: Bool = false
+    ) {
         SYPlayerConfig.shared.log(
             "Engine set URL: \(url.absoluteString), autoPlay: \(autoPlay)",
             level: .info
         )
         currentURL = url
         currentAutoPlay = autoPlay
+        self.isLiveHLS = isLiveHLS
+        shouldPlay = autoPlay
+        hasStartedPlayback = false
         didRetryWithFreshAsset = false
+        stallRecoveryAttempts = 0
 
         load(url: url, autoPlay: autoPlay, allowWarmedAsset: true)
     }
@@ -116,6 +129,7 @@ final class SYPlayerEngine {
         autoPlay: Bool,
         allowWarmedAsset: Bool
     ) {
+        shouldPlay = autoPlay
         state = .preparing
 
         cleanupItemOnly()
@@ -142,6 +156,13 @@ final class SYPlayerEngine {
         let newItem = AVPlayerItem(asset: asset)
         newItem.canUseNetworkResourcesForLiveStreamingWhilePaused = SYPlayerConfig.shared.allowNetworkResourcesWhilePaused
         newItem.preferredForwardBufferDuration = SYPlayerConfig.shared.preferredForwardBufferDuration
+        SYPlayerConfig.shared.log(
+            "Engine configure buffering: preferredForward="
+                + "\(newItem.preferredForwardBufferDuration)s, "
+                + "automaticallyWaitsToMinimizeStalling="
+                + "\(player.automaticallyWaitsToMinimizeStalling)",
+            level: .info
+        )
 
         self.item = newItem
 
@@ -160,11 +181,12 @@ final class SYPlayerEngine {
         guard player.currentItem != nil else { return }
 
         SYPlayerConfig.shared.log("Engine play", level: .debug)
+        shouldPlay = true
+        currentAutoPlay = true
         player.play()
-        isPlaying = true
-
-        // если уже ready — будет playing; если нет — останемся buffering/preparing
-        if case .ready = state { state = .playing }
+        if player.timeControlStatus != .playing {
+            state = .buffering
+        }
     }
 
     /// Pauses playback if an item is loaded.
@@ -172,6 +194,9 @@ final class SYPlayerEngine {
         guard player.currentItem != nil else { return }
 
         SYPlayerConfig.shared.log("Engine pause", level: .debug)
+        shouldPlay = false
+        currentAutoPlay = false
+        cancelLiveHLSStallRecovery()
         player.pause()
         isPlaying = false
 
@@ -221,10 +246,15 @@ final class SYPlayerEngine {
     func stop() {
         SYPlayerConfig.shared.log("Engine stop", level: .info)
         pause()
+        shouldPlay = false
+        currentAutoPlay = false
         state = .idle
         cleanupItemOnly()
         player.replaceCurrentItem(with: nil)
         currentURL = nil
+        isLiveHLS = false
+        hasStartedPlayback = false
+        stallRecoveryAttempts = 0
         didRetryWithFreshAsset = false
     }
 
@@ -256,20 +286,55 @@ private extension SYPlayerEngine {
 
     // MARK: - Observing
 
-    /// Observes player rate changes to update playing state.
+    /// Observes actual AVPlayer playback instead of the requested playback rate.
     func observe(_ player: AVPlayer) {
-        // player.rate -> isPlaying + статус
         let installObserver = { [weak self] in
             guard let self else { return }
-            playerRateObs = player.observe(\.rate, options: [.new]) { [weak self] _, change in
+            playerTimeControlStatusObs = player.observe(
+                \.timeControlStatus,
+                options: [.initial, .new]
+            ) { [weak self] player, _ in
                 guard let self else { return }
 
-                // проверка играем ли мы сейчас
-                let playingNow = (change.newValue ?? 0) != 0
-                isPlaying = playingNow
+                if let item {
+                    logBufferSnapshot(
+                        for: item,
+                        context: "time control changed"
+                    )
+                }
 
-                // если пошёл rate и мы готовы —> считаем playing
-                if playingNow { if case .ready = state { state = .playing } }
+                switch player.timeControlStatus {
+                case .playing:
+                    guard shouldPlay else {
+                        player.pause()
+                        return
+                    }
+                    isPlaying = true
+                    hasStartedPlayback = true
+                    stallRecoveryAttempts = 0
+                    cancelLiveHLSStallRecovery()
+                    state = .playing
+
+                case .waitingToPlayAtSpecifiedRate:
+                    isPlaying = false
+                    guard shouldPlay else { return }
+                    switch state {
+                    case .error, .ended, .idle:
+                        break
+                    default:
+                        state = .buffering
+                        scheduleLiveHLSStallRecoveryIfNeeded()
+                    }
+
+                case .paused:
+                    isPlaying = false
+                    if !shouldPlay {
+                        cancelLiveHLSStallRecovery()
+                    }
+
+                @unknown default:
+                    break
+                }
             }
         }
 
@@ -293,6 +358,7 @@ private extension SYPlayerEngine {
             case .readyToPlay:
                 let total = item.duration.seconds
                 let duration = total.isFinite ? total : 0
+                logBufferSnapshot(for: item, context: "item ready")
                 setReadyState(duration: duration)
 
                 // если был отложенный seek — применяем
@@ -313,10 +379,12 @@ private extension SYPlayerEngine {
                 if retryWithFreshAssetIfNeeded(for: item, reason: "item failed") {
                     return
                 }
+                cancelLiveHLSStallRecovery()
                 state = .error(item.error?.localizedDescription ?? "AVPlayerItem failed")
                 isPlaying = false
 
             @unknown default:
+                cancelLiveHLSStallRecovery()
                 state = .error("Unknown AVPlayerItem status")
                 isPlaying = false
             }
@@ -341,8 +409,11 @@ private extension SYPlayerEngine {
             guard let self, self.item === item else { return }
 
             if item.isPlaybackBufferEmpty {
-                // Не трогаем playing напрямую: rate обсервится отдельно
-                state = .buffering
+                logBufferSnapshot(for: item, context: "buffer empty")
+                if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+                    state = .buffering
+                    scheduleLiveHLSStallRecoveryIfNeeded()
+                }
             }
         }
 
@@ -353,6 +424,7 @@ private extension SYPlayerEngine {
             if item.isPlaybackLikelyToKeepUp {
                 // если мы уже готовы/играем — не трогаем лишний раз
                 if case .buffering = state {
+                    logBufferSnapshot(for: item, context: "buffer recovered")
                     // если длительность известна — можем перевести в ready
                     let total = item.duration.seconds
                     let duration = total.isFinite ? total : 0
@@ -387,6 +459,7 @@ private extension SYPlayerEngine {
         guard let item = notification.object as? AVPlayerItem,
               self.item === item else { return }
         SYPlayerConfig.shared.log("Engine item did play to end", level: .info)
+        cancelLiveHLSStallRecovery()
         state = .ended
         isPlaying = false
 
@@ -433,26 +506,12 @@ private extension SYPlayerEngine {
                 delegate.playerEngine(engine, playTimeDidChange: currentSafe, total: totalSafe)
             }
 
-            // Авто-поддержка buffering/ready по текущему состоянию item
             if item.status == .failed {
                 if retryWithFreshAssetIfNeeded(for: item, reason: "periodic item failure") {
                     return
                 }
+                cancelLiveHLSStallRecovery()
                 state = .error(item.error?.localizedDescription ?? "Playback failed")
-            } else if item.isPlaybackLikelyToKeepUp || item.isPlaybackBufferFull {
-                // не насилуем состояние, если уже playing/paused/ended
-                switch state {
-                case .buffering: setReadyState(duration: totalSafe)
-                default: break
-                }
-            } else {
-                // если реально не тянет — buffering
-                // (опционально: включать только когда rate==0)
-                if case .playing = state {
-                    // не трогаем, пока играет
-                } else {
-                    state = .buffering
-                }
             }
         }
     }
@@ -477,9 +536,201 @@ private extension SYPlayerEngine {
         return result.isFinite ? result : nil
     }
 
+    func logBufferSnapshot(for item: AVPlayerItem, context: String) {
+        let current = player.currentTime().seconds
+        let currentSafe = current.isFinite ? current : 0
+        let bufferedAhead = bufferedAhead(for: item, at: currentSafe)
+        let timeControlStatus: String
+        switch player.timeControlStatus {
+        case .paused:
+            timeControlStatus = "paused"
+        case .waitingToPlayAtSpecifiedRate:
+            timeControlStatus = "waiting"
+        case .playing:
+            timeControlStatus = "playing"
+        @unknown default:
+            timeControlStatus = "unknown"
+        }
+        let waitingReason = player.reasonForWaitingToPlay
+            .map { String(describing: $0) } ?? "none"
+
+        SYPlayerConfig.shared.log(
+            "Engine buffer snapshot (\(context)): current="
+                + "\(String(format: "%.3f", currentSafe))s, bufferedAhead="
+                + "\(String(format: "%.3f", bufferedAhead))s, ranges="
+                + "\(item.loadedTimeRanges.count), empty=\(item.isPlaybackBufferEmpty), "
+                + "likelyToKeepUp=\(item.isPlaybackLikelyToKeepUp), "
+                + "full=\(item.isPlaybackBufferFull), rate=\(player.rate), "
+                + "timeControlStatus=\(timeControlStatus), waitingReason=\(waitingReason)",
+            level: .info
+        )
+    }
+
+    func bufferedAhead(
+        for item: AVPlayerItem,
+        at currentTime: TimeInterval? = nil
+    ) -> TimeInterval {
+        let current = currentTime ?? player.currentTime().seconds
+        let currentSafe = current.isFinite ? current : 0
+        return item.loadedTimeRanges
+            .map(\.timeRangeValue)
+            .compactMap { range -> TimeInterval? in
+                let start = range.start.seconds
+                let end = CMTimeRangeGetEnd(range).seconds
+                guard start.isFinite,
+                      end.isFinite,
+                      currentSafe >= start - 0.05,
+                      currentSafe <= end + 0.05 else { return nil }
+                return max(0, end - currentSafe)
+            }
+            .max() ?? 0
+    }
+
+    func scheduleLiveHLSStallRecoveryIfNeeded() {
+        cancelLiveHLSStallRecovery()
+
+        let config = SYPlayerConfig.shared
+        let timeout = stallRecoveryAttempts == 0
+            ? config.liveHLSStallRecoveryTimeout
+            : config.liveHLSPostSeekRecoveryTimeout
+        let maxAttempts = max(0, config.liveHLSMaxStallRecoveryAttempts)
+        guard isLiveHLS,
+              shouldPlay,
+              hasStartedPlayback,
+              player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+              timeout > 0,
+              stallRecoveryAttempts < maxAttempts,
+              let item else { return }
+
+        let startPosition = player.currentTime().seconds
+        guard startPosition.isFinite else { return }
+
+        SYPlayerConfig.shared.log(
+            "Engine live HLS stall watchdog scheduled: \(timeout)s "
+                + "(attempt: \(stallRecoveryAttempts + 1)/\(maxAttempts))",
+            level: .warning
+        )
+
+        let workItem = DispatchWorkItem { [weak self, weak item] in
+            guard let self,
+                  let item,
+                  self.item === item,
+                  self.shouldPlay,
+                  self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
+
+            let currentPosition = self.player.currentTime().seconds
+            guard currentPosition.isFinite else { return }
+            guard currentPosition - startPosition < 0.25 else {
+                self.scheduleLiveHLSStallRecoveryIfNeeded()
+                return
+            }
+
+            self.stallRecoveryAttempts += 1
+            self.logBufferSnapshot(for: item, context: "stall watchdog fired")
+            if self.stallRecoveryAttempts == 1 {
+                if !self.seekToLiveEdgeForRecovery(item: item) {
+                    self.reloadFreshLiveHLSForRecovery()
+                }
+            } else {
+                self.reloadFreshLiveHLSForRecovery()
+            }
+        }
+        stallRecoveryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + timeout,
+            execute: workItem
+        )
+    }
+
+    func cancelLiveHLSStallRecovery() {
+        stallRecoveryWorkItem?.cancel()
+        stallRecoveryWorkItem = nil
+    }
+
+    @discardableResult
+    func seekToLiveEdgeForRecovery(item: AVPlayerItem) -> Bool {
+        let current = player.currentTime().seconds
+        guard current.isFinite else { return false }
+
+        let offset = max(0, SYPlayerConfig.shared.liveHLSRecoveryLiveEdgeOffset)
+        var candidates: [(target: TimeInterval, edge: TimeInterval, source: String)] = []
+
+        for range in item.loadedTimeRanges.map(\.timeRangeValue) {
+            let start = range.start.seconds
+            let end = CMTimeRangeGetEnd(range).seconds
+            guard start.isFinite,
+                  end.isFinite,
+                  current >= start - 0.05,
+                  current <= end + 0.05 else { continue }
+
+            let target = max(start, end - offset)
+            if target > current + 0.5 {
+                candidates.append((target, end, "loaded"))
+            }
+        }
+
+        for range in item.seekableTimeRanges.map(\.timeRangeValue) {
+            let start = range.start.seconds
+            let end = CMTimeRangeGetEnd(range).seconds
+            guard start.isFinite, end.isFinite else { continue }
+
+            let target = max(start, end - offset)
+            if target > current + 0.5 {
+                candidates.append((target, end, "seekable"))
+            }
+        }
+
+        let loadedCandidate = candidates
+            .filter { $0.source == "loaded" }
+            .max(by: { $0.target < $1.target })
+        guard let candidate = loadedCandidate
+            ?? candidates.max(by: { $0.target < $1.target }) else {
+            SYPlayerConfig.shared.log(
+                "Engine cannot seek live HLS during recovery: live edge is not ahead",
+                level: .warning
+            )
+            return false
+        }
+
+        SYPlayerConfig.shared.log(
+            "Engine recover live HLS by seeking from "
+                + "\(String(format: "%.3f", current))s to "
+                + "\(String(format: "%.3f", candidate.target))s "
+                + "(source: \(candidate.source), edge: "
+                + "\(String(format: "%.3f", candidate.edge))s)",
+            level: .warning
+        )
+
+        let targetTime = CMTime(seconds: candidate.target, preferredTimescale: 600)
+        let tolerance = CMTime(seconds: 1, preferredTimescale: 600)
+        player.seek(
+            to: targetTime,
+            toleranceBefore: tolerance,
+            toleranceAfter: tolerance
+        ) { [weak self, weak item] _ in
+            guard let self, let item, self.item === item, self.shouldPlay else { return }
+            self.player.play()
+            self.scheduleLiveHLSStallRecoveryIfNeeded()
+        }
+        return true
+    }
+
+    func reloadFreshLiveHLSForRecovery() {
+        guard let url = currentURL else { return }
+
+        SYPlayerConfig.shared.log(
+            "Engine recover live HLS with fresh item",
+            level: .warning
+        )
+        hasStartedPlayback = false
+        SYPlayerAssetWarmupStore.shared.invalidate(url: url)
+        load(url: url, autoPlay: shouldPlay, allowWarmedAsset: false)
+    }
+
     /// Clears item-specific observers and state.
     func cleanupItemOnly() {
         SYPlayerConfig.shared.log("Engine cleanup current item", level: .debug)
+        cancelLiveHLSStallRecovery()
         // notification
         if let item {
             NotificationCenter.default.removeObserver(
@@ -512,16 +763,19 @@ private extension SYPlayerEngine {
 
     /// Removes player-level observers.
     func removePlayerObservers() {
-        playerRateObs = nil
+        playerTimeControlStatusObs = nil
         NotificationCenter.default.removeObserver(self)
     }
 
-    /// Moves to ready state and upgrades to playing if playback already started.
+    /// Moves to the state matching the actual AVPlayer playback status.
     func setReadyState(duration: TimeInterval) {
-        state = .ready(duration: duration)
-
-        if isPlaying || player.rate > 0 {
+        switch player.timeControlStatus {
+        case .playing:
             state = .playing
+        case .waitingToPlayAtSpecifiedRate where shouldPlay:
+            state = .buffering
+        default:
+            state = shouldPlay ? .ready(duration: duration) : .paused
         }
     }
 

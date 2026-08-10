@@ -413,7 +413,11 @@ final class SYPlayer: UIView {
         webRTCEngine.rendererView.isHidden = true
         playerLayer.isHidden = false
         playerLayer.attach(player: engine.player)
-        engine.set(url: url, autoPlay: autoPlay)
+        engine.set(
+            url: url,
+            autoPlay: autoPlay,
+            isLiveHLS: resource?.videoType == .online
+        )
     }
 
     private func startWHEPVideo(endpointURL: URL, iceServers: [String], autoPlay: Bool) {
