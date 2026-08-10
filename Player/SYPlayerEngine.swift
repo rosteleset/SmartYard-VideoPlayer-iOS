@@ -107,8 +107,12 @@ final class SYPlayerEngine {
         let asset: AVURLAsset
         if let warmedAsset = SYPlayerAssetWarmupStore.shared.preparedAsset(for: url) {
             asset = warmedAsset
+            SYPlayerConfig.shared.log(
+                "Engine use warmed asset: \(warmedAsset.url.absoluteString)",
+                level: .debug
+            )
         } else {
-            asset = AVURLAsset(url: url)
+            asset = SYPlayerConfig.shared.makeAsset(url: url)
         }
         self.urlAsset = asset
 

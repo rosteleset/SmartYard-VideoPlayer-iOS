@@ -18,12 +18,12 @@ public extension SYPlayerConfig {
             "Prefetch request count: \(hls.count), maxCount: \(maxCount)",
             level: .info
         )
-        SYHLSPrefetchController.shared.prefetch(urls: Array(hls))
+        hls.forEach { SYPlayerAssetWarmupStore.shared.warmup(url: $0) }
     }
 
     /// Cancel all scheduled and in-flight prefetch work.
     public func cancelPrefetch() {
         SYPlayerConfig.shared.log("Prefetch cancel all", level: .info)
-        SYHLSPrefetchController.shared.cancelAll()
+        SYPlayerAssetWarmupStore.shared.cancelAll()
     }
 }

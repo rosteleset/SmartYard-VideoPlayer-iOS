@@ -167,7 +167,7 @@ public final class SYPlayerConfig {
         makeAsset(url: resource.url, options: resource.options)
     }
 
-    /// Builds an AVURLAsset for a URL, using proxy URL for HLS when needed.
+    /// Builds an AVURLAsset for a URL.
     func makeAsset(url: URL, options: [String: Any]? = nil) -> AVURLAsset {
         if url.isFileURL {
             log("Build asset for file URL: \(url.path)", level: .debug)
@@ -175,9 +175,8 @@ public final class SYPlayerConfig {
         }
 
         if url.pathExtension.lowercased() == "m3u8" {
-            log("Build asset for HLS URL via proxy: \(url.absoluteString)", level: .debug)
-            let proxyURL = SYKTVHTTPCacheCoordinator.proxyURL(for: url)
-            return AVURLAsset(url: proxyURL, options: options)
+            log("Build asset for HLS URL: \(url.absoluteString)", level: .debug)
+            return AVURLAsset(url: url, options: options)
         }
 
         log("Build asset for URL: \(url.absoluteString)", level: .debug)

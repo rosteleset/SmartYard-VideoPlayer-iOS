@@ -39,7 +39,7 @@ public final class SYPlayerAssetWarmupStore {
                 return
             }
 
-            let asset = AVURLAsset(url: url, options: options)
+            let asset = SYPlayerConfig.shared.makeAsset(url: url, options: options)
             entries[key] = Entry(
                 asset: asset,
                 expiresAt: Date().addingTimeInterval(ttl)
@@ -75,7 +75,17 @@ public final class SYPlayerAssetWarmupStore {
     public func cancel(url: URL) {
         let key = cacheKey(for: url)
         queue.async { [weak self] in
-            self?.entries[key] = nil
+            guard let self else { return }
+            entries.removeValue(forKey: key)?.asset.cancelLoading()
+        }
+    }
+
+    public func cancelAll() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let assets = entries.values.map(\.asset)
+            entries.removeAll()
+            assets.forEach { $0.cancelLoading() }
         }
     }
 

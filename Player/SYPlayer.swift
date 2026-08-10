@@ -199,7 +199,7 @@ final class SYPlayer: UIView {
                 "Player prefetch HLS for \(video.url.absoluteString)",
                 level: .debug
             )
-            SYHLSPrefetchController.shared.prefetch(urls: [video.url])
+            SYPlayerConfig.shared.prefetch(urls: [video.url], maxCount: 1)
         }
 
         let shouldAutoPlay = SYPlayerConfig.shared.shouldAutoPlay

@@ -4,7 +4,7 @@ Pod::Spec.new do |s|
   s.summary = "SmartYard video player UI and playback components."
   s.description = <<-DESC
 SmartYardVideoPlayer provides a UIKit-based video player with archive/online playback,
-HLS prefetching, caching, and customizable controls.
+HLS warmup and customizable controls.
   DESC
   s.homepage = "https://github.com/rosteleset/SmartYard-VideoPlayer-iOS"
   s.license = { :type => "GPL-3.0", :file => "LICENSE" }
@@ -25,13 +25,12 @@ HLS prefetching, caching, and customizable controls.
     ]
   }
 
-  s.frameworks = "UIKit", "AVFoundation", "Network"
+  s.frameworks = "UIKit", "AVFoundation"
   s.dependency "SnapKit"
   s.dependency "RxSwift"
   s.dependency "RxCocoa"
   s.dependency "lottie-ios"
   s.dependency "Kingfisher"
-  s.dependency "KTVHTTPCache"
   s.dependency "SwifterSwift"
   s.dependency "TouchAreaInsets"
   s.dependency "WebRTC-lib"
