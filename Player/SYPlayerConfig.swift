@@ -117,6 +117,9 @@ public final class SYPlayerConfig {
     /// Do we allow streaming resources when paused?
     public var allowNetworkResourcesWhilePaused: Bool = true
 
+    /// Time to skip WHEP after a failed attempt.
+    public var whepCooldownDuration: TimeInterval = 60
+
     // MARK: - Assets
 
     public var icons: SYPlayerIcons = SYPlayerIcons()

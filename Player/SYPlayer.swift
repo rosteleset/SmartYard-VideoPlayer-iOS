@@ -385,6 +385,18 @@ final class SYPlayer: UIView {
         case .hls(let url):
             startHLSVideo(url: url, autoPlay: autoPlay)
         case .whep(let endpointURL, let iceServers):
+            if let cooldown = SYWHEPCooldownStore.shared.activeCooldown(for: endpointURL),
+               let nextVideo = resource?.video(at: currentVideoIndex + 1),
+               case .hls = nextVideo.source {
+                let remainingSeconds = Int(ceil(cooldown.remaining))
+                let message = "Player skip WHEP during cooldown "
+                    + "(remaining: \(remainingSeconds)s, reason: \(cooldown.reason))"
+                SYPlayerConfig.shared.log(
+                    message,
+                    level: .warning
+                )
+                if fallbackToNextVideoIfPossible(announceTransportSwitch: false) { return }
+            }
             startWHEPVideo(endpointURL: endpointURL, iceServers: iceServers, autoPlay: autoPlay)
         }
     }
@@ -453,7 +465,9 @@ final class SYPlayer: UIView {
         }
     }
 
-    private func fallbackToNextVideoIfPossible() -> Bool {
+    private func fallbackToNextVideoIfPossible(
+        announceTransportSwitch: Bool = true
+    ) -> Bool {
         guard let resource,
               let currentVideo,
               currentVideoIndex + 1 < resource.videos.count
@@ -465,8 +479,10 @@ final class SYPlayer: UIView {
         let nextVideo = resource.videos[currentVideoIndex]
         if case .whep = currentVideo.source,
            case .hls = nextVideo.source {
-            isFallbackPlayback = true
-            controlView.setTransportState(.switchingToHLS)
+            isFallbackPlayback = announceTransportSwitch
+            if announceTransportSwitch {
+                controlView.setTransportState(.switchingToHLS)
+            }
         } else {
             isFallbackPlayback = false
         }
@@ -567,8 +583,9 @@ extension SYPlayer: SYWebRTCPlayerEngineDelegate {
         _ engine: SYWebRTCPlayerEngine,
         stateDidChange state: SYPlayerState
     ) {
-        if case .error = state, fallbackToNextVideoIfPossible() {
-            return
+        if case .error(let message) = state {
+            recordWHEPFailure(message: message)
+            if fallbackToNextVideoIfPossible() { return }
         }
 
         controlView.playerStateDidChange(state: state)
@@ -576,6 +593,7 @@ extension SYPlayer: SYWebRTCPlayerEngineDelegate {
 
         switch state {
         case .playing:
+            clearWHEPCooldownAfterSuccessfulPlayback()
             controlView.setTransportState(
                 .playing(.webRTC, announceConnection: false)
             )
@@ -595,6 +613,41 @@ extension SYPlayer: SYWebRTCPlayerEngineDelegate {
         default:
             break
         }
+    }
+
+    private func recordWHEPFailure(message: String) {
+        guard let currentVideo,
+              case .whep(let endpointURL, _) = currentVideo.source
+        else {
+            return
+        }
+
+        let duration = SYPlayerConfig.shared.whepCooldownDuration
+        SYWHEPCooldownStore.shared.recordFailure(
+            endpointURL: endpointURL,
+            reason: message,
+            duration: duration
+        )
+        guard duration > 0 else { return }
+
+        SYPlayerConfig.shared.log(
+            "Player WHEP cooldown started for \(Int(ceil(duration)))s (reason: \(message))",
+            level: .warning
+        )
+    }
+
+    private func clearWHEPCooldownAfterSuccessfulPlayback() {
+        guard let currentVideo,
+              case .whep(let endpointURL, _) = currentVideo.source,
+              SYWHEPCooldownStore.shared.clear(endpointURL: endpointURL)
+        else {
+            return
+        }
+
+        SYPlayerConfig.shared.log(
+            "Player WHEP cooldown cleared after successful playback",
+            level: .debug
+        )
     }
 
     func webRTCPlayerEngine(

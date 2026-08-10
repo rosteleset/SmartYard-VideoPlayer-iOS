@@ -355,6 +355,13 @@ private extension SYWebRTCPlayerEngine {
             guard let self else { return }
 
             if let error {
+                if let urlError = error as? URLError, urlError.code == .cancelled {
+                    SYPlayerConfig.shared.log(
+                        "WebRTC offer request cancelled",
+                        level: .debug
+                    )
+                    return
+                }
                 self.fail(error.localizedDescription)
                 return
             }
