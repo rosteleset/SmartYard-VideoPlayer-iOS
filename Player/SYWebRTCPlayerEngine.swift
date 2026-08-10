@@ -25,7 +25,6 @@ private final class SYWebRTCVideoFrameRenderer: NSObject, RTCVideoRenderer {
     private let rendererView: RTCMTLVideoView
     private let onVideoDidStart: () -> Void
 
-    private var previousTimestampNs: Int64?
     private var didReportVideoStart = false
 
     init(
@@ -38,7 +37,6 @@ private final class SYWebRTCVideoFrameRenderer: NSObject, RTCVideoRenderer {
     }
 
     func reset() {
-        previousTimestampNs = nil
         didReportVideoStart = false
     }
 
@@ -49,13 +47,7 @@ private final class SYWebRTCVideoFrameRenderer: NSObject, RTCVideoRenderer {
     func renderFrame(_ frame: RTCVideoFrame?) {
         rendererView.renderFrame(frame)
 
-        guard let frame else { return }
-        let timestampNs = frame.timeStampNs
-        defer { previousTimestampNs = timestampNs }
-
-        guard let previousTimestampNs,
-              previousTimestampNs != timestampNs,
-              !didReportVideoStart else { return }
+        guard frame != nil, !didReportVideoStart else { return }
 
         didReportVideoStart = true
         DispatchQueue.main.async { [onVideoDidStart] in
@@ -92,12 +84,14 @@ final class SYWebRTCPlayerEngine: NSObject {
     private var iceGatheringTimeoutWorkItem: DispatchWorkItem?
     private var pendingOffer: RTCSessionDescription?
     private var pendingOfferEndpointURL: URL?
-    private var connectionTimeoutWorkItem: DispatchWorkItem?
+    private var handshakeTimeoutWorkItem: DispatchWorkItem?
+    private var firstFrameTimeoutWorkItem: DispatchWorkItem?
     private var audioStatsWorkItem: DispatchWorkItem?
     private var currentEndpointURL: URL?
     private var currentIceServers: [String] = []
     private var shouldPlayAfterSetup = false
     private var isMuted = true
+    private var hasCompletedHandshake = false
 
     private(set) var state: SYPlayerState = .idle {
         didSet {
@@ -211,7 +205,7 @@ private extension SYWebRTCPlayerEngine {
 
         cleanupConnection()
         state = .preparing
-        scheduleConnectionTimeout()
+        scheduleHandshakeTimeout()
 
         let config = RTCConfiguration()
         let filteredIceServers = currentIceServers.filter { !$0.isEmpty && $0 != "none:" }
@@ -346,7 +340,10 @@ private extension SYWebRTCPlayerEngine {
 
     func sendOffer(_ sdp: RTCSessionDescription, endpointURL: URL) {
         var request = URLRequest(url: endpointURL)
-        request.timeoutInterval = 5
+        let handshakeTimeout = SYPlayerConfig.shared.whepHandshakeTimeout
+        if handshakeTimeout > 0 {
+            request.timeoutInterval = handshakeTimeout
+        }
         request.httpMethod = "POST"
         request.setValue("application/sdp", forHTTPHeaderField: "Content-Type")
         request.httpBody = sdp.sdp.data(using: .utf8)
@@ -410,8 +407,11 @@ private extension SYWebRTCPlayerEngine {
         iceGatheringTimeoutWorkItem = nil
         pendingOffer = nil
         pendingOfferEndpointURL = nil
-        connectionTimeoutWorkItem?.cancel()
-        connectionTimeoutWorkItem = nil
+        handshakeTimeoutWorkItem?.cancel()
+        handshakeTimeoutWorkItem = nil
+        firstFrameTimeoutWorkItem?.cancel()
+        firstFrameTimeoutWorkItem = nil
+        hasCompletedHandshake = false
         audioStatsWorkItem?.cancel()
         audioStatsWorkItem = nil
         remoteVideoTrack?.remove(videoFrameRenderer)
@@ -476,15 +476,56 @@ private extension SYWebRTCPlayerEngine {
         state = .error(message)
     }
 
-    func scheduleConnectionTimeout() {
-        connectionTimeoutWorkItem?.cancel()
+    func scheduleHandshakeTimeout() {
+        handshakeTimeoutWorkItem?.cancel()
+
+        let timeout = SYPlayerConfig.shared.whepHandshakeTimeout
+        guard timeout > 0 else { return }
+
+        SYPlayerConfig.shared.log(
+            "WebRTC handshake timeout scheduled: \(timeout)s",
+            level: .debug
+        )
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, !self.hasCompletedHandshake, !self.isPlaying else { return }
+            self.fail("WHEP handshake timeout")
+        }
+        handshakeTimeoutWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: workItem)
+    }
+
+    func completeHandshakeIfNeeded() {
+        guard !hasCompletedHandshake else { return }
+
+        hasCompletedHandshake = true
+        handshakeTimeoutWorkItem?.cancel()
+        handshakeTimeoutWorkItem = nil
+
+        SYPlayerConfig.shared.log("WebRTC handshake completed", level: .debug)
+
+        guard !isPlaying else { return }
+        state = .buffering
+        scheduleFirstFrameTimeout()
+    }
+
+    func scheduleFirstFrameTimeout() {
+        firstFrameTimeoutWorkItem?.cancel()
+
+        let timeout = SYPlayerConfig.shared.whepFirstFrameTimeout
+        guard timeout > 0 else { return }
+
+        SYPlayerConfig.shared.log(
+            "WebRTC first frame timeout scheduled: \(timeout)s",
+            level: .debug
+        )
 
         let workItem = DispatchWorkItem { [weak self] in
             guard let self, !self.isPlaying else { return }
-            self.fail("WHEP connection timeout")
+            self.fail("WHEP first frame timeout")
         }
-        connectionTimeoutWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: workItem)
+        firstFrameTimeoutWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: workItem)
     }
 
     func scheduleAudioStatsLogging() {
@@ -574,8 +615,13 @@ private extension SYWebRTCPlayerEngine {
     }
 
     func handleVideoDidStart() {
-        connectionTimeoutWorkItem?.cancel()
-        connectionTimeoutWorkItem = nil
+        guard peerConnection != nil else { return }
+
+        hasCompletedHandshake = true
+        handshakeTimeoutWorkItem?.cancel()
+        handshakeTimeoutWorkItem = nil
+        firstFrameTimeoutWorkItem?.cancel()
+        firstFrameTimeoutWorkItem = nil
 
         guard !isPlaying else { return }
         SYPlayerConfig.shared.log("WebRTC video frames started", level: .debug)
@@ -613,11 +659,18 @@ extension SYWebRTCPlayerEngine: RTCPeerConnectionDelegate {
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         SYPlayerConfig.shared.log("WebRTC ICE state: \(newState)", level: .debug)
+        guard peerConnection === self.peerConnection else {
+            SYPlayerConfig.shared.log(
+                "WebRTC ignore ICE state from stale connection",
+                level: .debug
+            )
+            return
+        }
 
         switch newState {
         case .connected, .completed:
+            completeHandshakeIfNeeded()
             configureAudioSession()
-            if !isPlaying { state = .buffering }
         case .failed:
             fail("WebRTC connection failed")
         case .disconnected:

@@ -120,6 +120,12 @@ public final class SYPlayerConfig {
     /// Time to skip WHEP after a failed attempt.
     public var whepCooldownDuration: TimeInterval = 60
 
+    /// Maximum time for the WHEP HTTP, SDP, and ICE handshake.
+    public var whepHandshakeTimeout: TimeInterval = 2
+
+    /// Maximum time to receive the first video frame after the WHEP handshake.
+    public var whepFirstFrameTimeout: TimeInterval = 1.25
+
     // MARK: - Assets
 
     public var icons: SYPlayerIcons = SYPlayerIcons()

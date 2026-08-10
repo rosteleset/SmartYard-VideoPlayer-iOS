@@ -44,6 +44,10 @@ final class SYPlayerEngine {
 
     private var item: AVPlayerItem?
     private var urlAsset: AVURLAsset?
+    private var isUsingWarmedAsset = false
+    private var currentURL: URL?
+    private var currentAutoPlay = true
+    private var didRetryWithFreshAsset = false
 
     // Time observer token
     private var timeObserverToken: Any?
@@ -100,19 +104,38 @@ final class SYPlayerEngine {
             "Engine set URL: \(url.absoluteString), autoPlay: \(autoPlay)",
             level: .info
         )
+        currentURL = url
+        currentAutoPlay = autoPlay
+        didRetryWithFreshAsset = false
+
+        load(url: url, autoPlay: autoPlay, allowWarmedAsset: true)
+    }
+
+    private func load(
+        url: URL,
+        autoPlay: Bool,
+        allowWarmedAsset: Bool
+    ) {
         state = .preparing
 
         cleanupItemOnly()
 
         let asset: AVURLAsset
-        if let warmedAsset = SYPlayerAssetWarmupStore.shared.preparedAsset(for: url) {
+        if allowWarmedAsset,
+           let warmedAsset = SYPlayerAssetWarmupStore.shared.preparedAsset(for: url) {
             asset = warmedAsset
+            isUsingWarmedAsset = true
             SYPlayerConfig.shared.log(
                 "Engine use warmed asset: \(warmedAsset.url.absoluteString)",
                 level: .debug
             )
         } else {
             asset = SYPlayerConfig.shared.makeAsset(url: url)
+            isUsingWarmedAsset = false
+            SYPlayerConfig.shared.log(
+                "Engine use fresh asset: \(asset.url.absoluteString)",
+                level: .debug
+            )
         }
         self.urlAsset = asset
 
@@ -201,6 +224,8 @@ final class SYPlayerEngine {
         state = .idle
         cleanupItemOnly()
         player.replaceCurrentItem(with: nil)
+        currentURL = nil
+        didRetryWithFreshAsset = false
     }
 
     /// Stops playback and removes observers.
@@ -259,7 +284,7 @@ private extension SYPlayerEngine {
     func observe(_ item: AVPlayerItem) {
         // status -> ready/error
         itemStatusObs = item.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
-            guard let self else { return }
+            guard let self, self.item === item else { return }
 
             switch item.status {
             case .unknown:
@@ -284,6 +309,10 @@ private extension SYPlayerEngine {
                 }
 
             case .failed:
+                logFailureDiagnostics(for: item)
+                if retryWithFreshAssetIfNeeded(for: item, reason: "item failed") {
+                    return
+                }
                 state = .error(item.error?.localizedDescription ?? "AVPlayerItem failed")
                 isPlaying = false
 
@@ -295,7 +324,9 @@ private extension SYPlayerEngine {
 
         // loadedTimeRanges -> прогресс буфера
         loadedRangesObs = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self] item, _ in
-            guard let self, let loaded = availableDuration(for: item) else { return }
+            guard let self,
+                  self.item === item,
+                  let loaded = availableDuration(for: item) else { return }
 
             let total = item.duration.seconds
             let totalSafe = total.isFinite ? total : 0
@@ -307,7 +338,7 @@ private extension SYPlayerEngine {
 
         // playbackBufferEmpty -> buffering
         bufferEmptyObs = item.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] item, _ in
-            guard let self else { return }
+            guard let self, self.item === item else { return }
 
             if item.isPlaybackBufferEmpty {
                 // Не трогаем playing напрямую: rate обсервится отдельно
@@ -317,7 +348,7 @@ private extension SYPlayerEngine {
 
         // playbackLikelyToKeepUp -> buffer finished
         keepUpObs = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
-            guard let self else { return }
+            guard let self, self.item === item else { return }
 
             if item.isPlaybackLikelyToKeepUp {
                 // если мы уже готовы/играем — не трогаем лишний раз
@@ -333,26 +364,51 @@ private extension SYPlayerEngine {
         // ended notification
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(itemDidPlayToEnd),
+            selector: #selector(itemDidPlayToEnd(_:)),
             name: .AVPlayerItemDidPlayToEndTime,
+            object: item
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(itemNewErrorLogEntry(_:)),
+            name: .AVPlayerItemNewErrorLogEntry,
+            object: item
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(itemNewAccessLogEntry(_:)),
+            name: .AVPlayerItemNewAccessLogEntry,
             object: item
         )
     }
 
     /// Handles playback completion.
-    @objc func itemDidPlayToEnd() {
+    @objc func itemDidPlayToEnd(_ notification: Notification) {
+        guard let item = notification.object as? AVPlayerItem,
+              self.item === item else { return }
         SYPlayerConfig.shared.log("Engine item did play to end", level: .info)
         state = .ended
         isPlaying = false
 
         // Финальный прогресс
-        if let item = player.currentItem {
-            let total = item.duration.seconds
-            let totalSafe = total.isFinite ? total : 0
-            notifyDelegate { engine, delegate in
-                delegate.playerEngine(engine, playTimeDidChange: totalSafe, total: totalSafe)
-            }
+        let total = item.duration.seconds
+        let totalSafe = total.isFinite ? total : 0
+        notifyDelegate { engine, delegate in
+            delegate.playerEngine(engine, playTimeDidChange: totalSafe, total: totalSafe)
         }
+    }
+
+    @objc func itemNewErrorLogEntry(_ notification: Notification) {
+        guard let item = notification.object as? AVPlayerItem,
+              self.item === item else { return }
+        logErrorLog(for: item, context: "new entry")
+        _ = retryWithFreshAssetIfNeeded(for: item, reason: "error log entry")
+    }
+
+    @objc func itemNewAccessLogEntry(_ notification: Notification) {
+        guard let item = notification.object as? AVPlayerItem,
+              self.item === item else { return }
+        logAccessLog(for: item, context: "new entry")
     }
 
     // MARK: - Periodic time observer
@@ -379,6 +435,9 @@ private extension SYPlayerEngine {
 
             // Авто-поддержка buffering/ready по текущему состоянию item
             if item.status == .failed {
+                if retryWithFreshAssetIfNeeded(for: item, reason: "periodic item failure") {
+                    return
+                }
                 state = .error(item.error?.localizedDescription ?? "Playback failed")
             } else if item.isPlaybackLikelyToKeepUp || item.isPlaybackBufferFull {
                 // не насилуем состояние, если уже playing/paused/ended
@@ -428,6 +487,16 @@ private extension SYPlayerEngine {
                 name: .AVPlayerItemDidPlayToEndTime,
                 object: item
             )
+            NotificationCenter.default.removeObserver(
+                self,
+                name: .AVPlayerItemNewErrorLogEntry,
+                object: item
+            )
+            NotificationCenter.default.removeObserver(
+                self,
+                name: .AVPlayerItemNewAccessLogEntry,
+                object: item
+            )
         }
 
         // KVO tokens
@@ -437,6 +506,7 @@ private extension SYPlayerEngine {
         keepUpObs = nil
 
         item = nil
+        isUsingWarmedAsset = false
         pendingSeek = nil
     }
 
@@ -453,5 +523,111 @@ private extension SYPlayerEngine {
         if isPlaying || player.rate > 0 {
             state = .playing
         }
+    }
+
+    @discardableResult
+    func retryWithFreshAssetIfNeeded(
+        for item: AVPlayerItem,
+        reason: String
+    ) -> Bool {
+        guard self.item === item,
+              isUsingWarmedAsset,
+              !didRetryWithFreshAsset,
+              let url = currentURL else { return false }
+
+        switch state {
+        case .preparing, .buffering:
+            break
+        default:
+            return false
+        }
+
+        didRetryWithFreshAsset = true
+        SYPlayerAssetWarmupStore.shared.invalidate(url: url)
+        SYPlayerConfig.shared.log(
+            "Engine retry warmed asset with fresh item (reason: \(reason), "
+                + "url: \(url.absoluteString))",
+            level: .warning
+        )
+        load(
+            url: url,
+            autoPlay: currentAutoPlay,
+            allowWarmedAsset: false
+        )
+        return true
+    }
+
+    func logFailureDiagnostics(for item: AVPlayerItem) {
+        let source = isUsingWarmedAsset ? "warmed" : "fresh"
+        let url = urlAsset?.url.absoluteString ?? "unknown"
+        SYPlayerConfig.shared.log(
+            "Engine item failed (asset: \(source), url: \(url), error: \(errorSummary(item.error)))",
+            level: .error
+        )
+        logErrorLog(for: item, context: "item failed")
+        logAccessLog(for: item, context: "item failed")
+    }
+
+    func logErrorLog(for item: AVPlayerItem, context: String) {
+        guard let event = item.errorLog()?.events.last else {
+            SYPlayerConfig.shared.log(
+                "Engine error log unavailable (\(context))",
+                level: .warning
+            )
+            return
+        }
+
+        let comment = event.errorComment ?? "none"
+        let uri = event.uri ?? "none"
+        let server = event.serverAddress ?? "none"
+        let session = event.playbackSessionID ?? "none"
+        SYPlayerConfig.shared.log(
+            "Engine error log (\(context)): domain=\(event.errorDomain), "
+                + "status=\(event.errorStatusCode), comment=\(comment), "
+                + "uri=\(uri), server=\(server), session=\(session)",
+            level: .error
+        )
+    }
+
+    func logAccessLog(for item: AVPlayerItem, context: String) {
+        guard let event = item.accessLog()?.events.last else {
+            SYPlayerConfig.shared.log(
+                "Engine access log unavailable (\(context))",
+                level: .debug
+            )
+            return
+        }
+
+        let uri = event.uri ?? "none"
+        let server = event.serverAddress ?? "none"
+        let session = event.playbackSessionID ?? "none"
+        let playbackType = event.playbackType ?? "none"
+        SYPlayerConfig.shared.log(
+            "Engine access log (\(context)): uri=\(uri), server=\(server), "
+                + "session=\(session), type=\(playbackType), "
+                + "requests=\(event.numberOfMediaRequests), "
+                + "bytes=\(event.numberOfBytesTransferred), transfer=\(event.transferDuration)s, "
+                + "observedBitrate=\(event.observedBitrate), indicatedBitrate=\(event.indicatedBitrate), "
+                + "stalls=\(event.numberOfStalls), startup=\(event.startupTime)s",
+            level: .debug
+        )
+    }
+
+    func errorSummary(_ error: Error?, depth: Int = 0) -> String {
+        guard let error else { return "none" }
+
+        let nsError = error as NSError
+        var summary = "\(nsError.domain):\(nsError.code) \(nsError.localizedDescription)"
+        if let reason = nsError.localizedFailureReason {
+            summary += ", reason=\(reason)"
+        }
+        if let suggestion = nsError.localizedRecoverySuggestion {
+            summary += ", suggestion=\(suggestion)"
+        }
+        if depth < 3,
+           let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            summary += ", underlying={\(errorSummary(underlying, depth: depth + 1))}"
+        }
+        return summary
     }
 }
