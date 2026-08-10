@@ -192,14 +192,16 @@ final class SYPlayer: UIView {
 
         controlView.prepareUI(for: resource, selectedIndex: videoIndex)
 
-        if resource.videoType == .online,
-           let video = resource.video(at: videoIndex),
-           video.url.pathExtension.lowercased() == "m3u8" {
+        let hlsVideo = resource.videos.first { video in
+            guard case .hls = video.source else { return false }
+            return true
+        }
+        if resource.videoType == .online, let hlsVideo {
             SYPlayerConfig.shared.log(
-                "Player prefetch HLS for \(video.url.absoluteString)",
+                "Player prefetch HLS for \(hlsVideo.url.absoluteString)",
                 level: .debug
             )
-            SYPlayerConfig.shared.prefetch(urls: [video.url], maxCount: 1)
+            SYPlayerConfig.shared.prefetch(urls: [hlsVideo.url], maxCount: 1)
         }
 
         let shouldAutoPlay = SYPlayerConfig.shared.shouldAutoPlay
