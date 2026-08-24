@@ -50,28 +50,40 @@ public struct SYPlayerTransportAppearance {
 public struct SYPlayerTransportStrings {
     public var connectingWebRTC: String
     public var connectingHLS: String
+    public var connectingLowLatencyHLS: String
     public var switchingToHLS: String
+    public var switchingToLowLatencyHLS: String
     public var connectedHLS: String
+    public var connectedLowLatencyHLS: String
     public var videoUnavailable: String
     public var webRTCInfo: String
     public var hlsInfo: String
+    public var lowLatencyHLSInfo: String
 
     public init(
         connectingWebRTC: String = "Connecting via WebRTC…",
         connectingHLS: String = "Connecting via HLS…",
+        connectingLowLatencyHLS: String = "Connecting via LL-HLS…",
         switchingToHLS: String = "WebRTC is unavailable. Connecting via HLS…",
+        switchingToLowLatencyHLS: String = "WebRTC is unavailable. Connecting via LL-HLS…",
         connectedHLS: String = "Connected via HLS",
+        connectedLowLatencyHLS: String = "Connected via LL-HLS",
         videoUnavailable: String = "Unable to load video",
         webRTCInfo: String = "Video is delivered via WebRTC. This method usually provides lower latency.",
-        hlsInfo: String = "HLS uses buffering, which can smooth brief network interruptions. A delay from real time is possible."
+        hlsInfo: String = "HLS uses buffering, which can smooth brief network interruptions. A delay from real time is possible.",
+        lowLatencyHLSInfo: String = "Low-latency video delivery."
     ) {
         self.connectingWebRTC = connectingWebRTC
         self.connectingHLS = connectingHLS
+        self.connectingLowLatencyHLS = connectingLowLatencyHLS
         self.switchingToHLS = switchingToHLS
+        self.switchingToLowLatencyHLS = switchingToLowLatencyHLS
         self.connectedHLS = connectedHLS
+        self.connectedLowLatencyHLS = connectedLowLatencyHLS
         self.videoUnavailable = videoUnavailable
         self.webRTCInfo = webRTCInfo
         self.hlsInfo = hlsInfo
+        self.lowLatencyHLSInfo = lowLatencyHLSInfo
     }
 }
 
@@ -113,6 +125,24 @@ public final class SYPlayerConfig {
 
     /// Default buffer settings
     public var preferredForwardBufferDuration: TimeInterval = 6
+
+    /// Whether regular HLS playback waits for enough buffered media to minimize stalls.
+    public var automaticallyWaitsToMinimizeStalling: Bool = true
+
+    /// Forward buffer used for live LL-HLS playback.
+    public var lowLatencyHLSPreferredForwardBufferDuration: TimeInterval = 1
+
+    /// Whether LL-HLS starts immediately instead of waiting to minimize stalls.
+    public var lowLatencyHLSAutomaticallyWaitsToMinimizeStalling: Bool = false
+
+    /// Optional fixed distance from the live edge. Nil follows AVFoundation's recommendation.
+    public var lowLatencyHLSTargetLiveOffset: TimeInterval?
+
+    /// Keeps the LL-HLS playhead at the same distance from the live edge after buffering.
+    public var lowLatencyHLSAutomaticallyPreservesLiveOffset: Bool = true
+
+    /// Fallback live-edge distance used when AVFoundation has no LL-HLS recommendation yet.
+    public var lowLatencyHLSRecoveryLiveEdgeOffset: TimeInterval = 2
 
     /// Do we allow streaming resources when paused?
     public var allowNetworkResourcesWhilePaused: Bool = true

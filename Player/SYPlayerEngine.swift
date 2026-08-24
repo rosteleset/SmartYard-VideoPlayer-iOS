@@ -48,6 +48,7 @@ final class SYPlayerEngine {
     private var currentURL: URL?
     private var currentAutoPlay = true
     private var isLiveHLS = false
+    private var hlsLatencyMode: SYPlayerHLSLatencyMode = .standard
     private var shouldPlay = false
     private var hasStartedPlayback = false
     private var didRetryWithFreshAsset = false
@@ -107,7 +108,8 @@ final class SYPlayerEngine {
     func set(
         url: URL,
         autoPlay: Bool = true,
-        isLiveHLS: Bool = false
+        isLiveHLS: Bool = false,
+        hlsLatencyMode: SYPlayerHLSLatencyMode = .standard
     ) {
         SYPlayerConfig.shared.log(
             "Engine set URL: \(url.absoluteString), autoPlay: \(autoPlay)",
@@ -116,6 +118,7 @@ final class SYPlayerEngine {
         currentURL = url
         currentAutoPlay = autoPlay
         self.isLiveHLS = isLiveHLS
+        self.hlsLatencyMode = isLiveHLS ? hlsLatencyMode : .standard
         shouldPlay = autoPlay
         hasStartedPlayback = false
         didRetryWithFreshAsset = false
@@ -154,13 +157,13 @@ final class SYPlayerEngine {
         self.urlAsset = asset
 
         let newItem = AVPlayerItem(asset: asset)
-        newItem.canUseNetworkResourcesForLiveStreamingWhilePaused = SYPlayerConfig.shared.allowNetworkResourcesWhilePaused
-        newItem.preferredForwardBufferDuration = SYPlayerConfig.shared.preferredForwardBufferDuration
+        configurePlayback(item: newItem)
         SYPlayerConfig.shared.log(
             "Engine configure buffering: preferredForward="
                 + "\(newItem.preferredForwardBufferDuration)s, "
                 + "automaticallyWaitsToMinimizeStalling="
-                + "\(player.automaticallyWaitsToMinimizeStalling)",
+                + "\(player.automaticallyWaitsToMinimizeStalling), "
+                + "hlsLatencyMode=\(hlsLatencyMode)",
             level: .info
         )
 
@@ -253,6 +256,7 @@ final class SYPlayerEngine {
         player.replaceCurrentItem(with: nil)
         currentURL = nil
         isLiveHLS = false
+        hlsLatencyMode = .standard
         hasStartedPlayback = false
         stallRecoveryAttempts = 0
         didRetryWithFreshAsset = false
@@ -283,6 +287,75 @@ final class SYPlayerEngine {
 }
 
 private extension SYPlayerEngine {
+
+    var isLowLatencyHLS: Bool {
+        guard isLiveHLS else { return false }
+        if case .lowLatency = hlsLatencyMode { return true }
+        return false
+    }
+
+    func configurePlayback(item: AVPlayerItem) {
+        let config = SYPlayerConfig.shared
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = config.allowNetworkResourcesWhilePaused
+
+        guard isLowLatencyHLS else {
+            player.automaticallyWaitsToMinimizeStalling = config.automaticallyWaitsToMinimizeStalling
+            item.preferredForwardBufferDuration = max(0, config.preferredForwardBufferDuration)
+            return
+        }
+
+        player.automaticallyWaitsToMinimizeStalling =
+            config.lowLatencyHLSAutomaticallyWaitsToMinimizeStalling
+        item.preferredForwardBufferDuration = max(
+            0,
+            config.lowLatencyHLSPreferredForwardBufferDuration
+        )
+        item.automaticallyPreservesTimeOffsetFromLive =
+            config.lowLatencyHLSAutomaticallyPreservesLiveOffset
+
+        guard let targetOffset = config.lowLatencyHLSTargetLiveOffset else { return }
+        guard targetOffset.isFinite, targetOffset >= 0 else {
+            config.log(
+                "Engine ignore invalid LL-HLS target live offset: \(targetOffset)s",
+                level: .warning
+            )
+            return
+        }
+
+        item.configuredTimeOffsetFromLive = CMTime(
+            seconds: targetOffset,
+            preferredTimescale: 600
+        )
+    }
+
+    func applyRecommendedLiveOffsetIfNeeded(to item: AVPlayerItem) {
+        let config = SYPlayerConfig.shared
+        guard isLowLatencyHLS,
+              config.lowLatencyHLSTargetLiveOffset == nil,
+              let recommendedOffset = liveOffsetSeconds(
+                from: item.recommendedTimeOffsetFromLive
+              ) else { return }
+
+        if let currentOffset = liveOffsetSeconds(from: item.configuredTimeOffsetFromLive),
+           abs(currentOffset - recommendedOffset) < 0.05 {
+            return
+        }
+
+        item.configuredTimeOffsetFromLive = CMTime(
+            seconds: recommendedOffset,
+            preferredTimescale: 600
+        )
+        let formattedOffset = String(format: "%.3f", recommendedOffset)
+        config.log(
+            "Engine apply recommended LL-HLS live offset: \(formattedOffset)s",
+            level: .info
+        )
+    }
+
+    func liveOffsetSeconds(from time: CMTime) -> TimeInterval? {
+        let seconds = time.seconds
+        return seconds.isFinite && seconds >= 0 ? seconds : nil
+    }
 
     // MARK: - Observing
 
@@ -358,6 +431,7 @@ private extension SYPlayerEngine {
             case .readyToPlay:
                 let total = item.duration.seconds
                 let duration = total.isFinite ? total : 0
+                applyRecommendedLiveOffsetIfNeeded(to: item)
                 logBufferSnapshot(for: item, context: "item ready")
                 setReadyState(duration: duration)
 
@@ -495,6 +569,8 @@ private extension SYPlayerEngine {
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self else { return }
             guard let item = self.player.currentItem else { return }
+
+            applyRecommendedLiveOffsetIfNeeded(to: item)
 
             let current = time.seconds
             let total = item.duration.seconds
@@ -652,7 +728,7 @@ private extension SYPlayerEngine {
         let current = player.currentTime().seconds
         guard current.isFinite else { return false }
 
-        let offset = max(0, SYPlayerConfig.shared.liveHLSRecoveryLiveEdgeOffset)
+        let offset = liveHLSRecoveryOffset(for: item)
         var candidates: [(target: TimeInterval, edge: TimeInterval, source: String)] = []
 
         for range in item.loadedTimeRanges.map(\.timeRangeValue) {
@@ -713,6 +789,17 @@ private extension SYPlayerEngine {
             self.scheduleLiveHLSStallRecoveryIfNeeded()
         }
         return true
+    }
+
+    func liveHLSRecoveryOffset(for item: AVPlayerItem) -> TimeInterval {
+        let config = SYPlayerConfig.shared
+        guard isLowLatencyHLS else {
+            return max(0, config.liveHLSRecoveryLiveEdgeOffset)
+        }
+
+        return liveOffsetSeconds(from: item.configuredTimeOffsetFromLive)
+            ?? liveOffsetSeconds(from: item.recommendedTimeOffsetFromLive)
+            ?? max(0, config.lowLatencyHLSRecoveryLiveEdgeOffset)
     }
 
     func reloadFreshLiveHLSForRecovery() {

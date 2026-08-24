@@ -498,9 +498,11 @@ final class SYPlayerControlView: UIView {
         switch transportState {
         case .connecting, .switchingToHLS:
             transportStatusDotView.isHidden = true
-            transportActivityIndicator.color = transportState == .switchingToHLS
-                ? appearance.warningColor
-                : accentColor
+            if case .switchingToHLS = transportState {
+                transportActivityIndicator.color = appearance.warningColor
+            } else {
+                transportActivityIndicator.color = accentColor
+            }
             transportActivityIndicator.startAnimating()
 
         case .playing:
@@ -553,16 +555,40 @@ final class SYPlayerControlView: UIView {
                 accentColor: appearance.hlsColor
             )
 
-        case .switchingToHLS:
+        case .connecting(.lowLatencyHLS):
+            showTransportMessage(
+                strings.connectingLowLatencyHLS,
+                accentColor: appearance.hlsColor
+            )
+
+        case .switchingToHLS(.hls):
             showTransportMessage(
                 strings.switchingToHLS,
                 accentColor: appearance.warningColor,
                 announce: true
             )
 
+        case .switchingToHLS(.lowLatencyHLS):
+            showTransportMessage(
+                strings.switchingToLowLatencyHLS,
+                accentColor: appearance.warningColor,
+                announce: true
+            )
+
+        case .switchingToHLS(.webRTC):
+            hideTransportMessage()
+
         case .playing(.hls, let announceConnection) where announceConnection:
             showTransportMessage(
                 strings.connectedHLS,
+                accentColor: appearance.hlsColor,
+                announce: true
+            )
+            scheduleTransportMessageDismissal()
+
+        case .playing(.lowLatencyHLS, let announceConnection) where announceConnection:
+            showTransportMessage(
+                strings.connectedLowLatencyHLS,
                 accentColor: appearance.hlsColor,
                 announce: true
             )
@@ -726,12 +752,24 @@ final class SYPlayerControlView: UIView {
 
     private func transportColor(for transport: SYPlayerTransport) -> UIColor {
         let appearance = SYPlayerConfig.shared.transportAppearance
-        return transport == .webRTC ? appearance.webRTCColor : appearance.hlsColor
+        switch transport {
+        case .webRTC:
+            return appearance.webRTCColor
+        case .hls, .lowLatencyHLS:
+            return appearance.hlsColor
+        }
     }
 
     private func transportInfo(for transport: SYPlayerTransport) -> String {
         let strings = SYPlayerConfig.shared.transportStrings
-        return transport == .webRTC ? strings.webRTCInfo : strings.hlsInfo
+        switch transport {
+        case .webRTC:
+            return strings.webRTCInfo
+        case .hls:
+            return strings.hlsInfo
+        case .lowLatencyHLS:
+            return strings.lowLatencyHLSInfo
+        }
     }
 
     // MARK: - Auto hide
@@ -967,7 +1005,7 @@ final class SYPlayerControlView: UIView {
         }
 
         transportBadgeButton.snp.makeConstraints {
-            $0.leading.equalTo(safeAreaLayoutGuide).offset(Layout.transportOverlayHorizontalInset)
+            $0.trailing.equalTo(safeAreaLayoutGuide).inset(Layout.transportOverlayHorizontalInset)
             $0.bottom.equalTo(safeAreaLayoutGuide).inset(12)
             $0.height.equalTo(Layout.transportBadgeHeight)
         }
@@ -996,9 +1034,9 @@ final class SYPlayerControlView: UIView {
         }
 
         transportTooltipView.snp.makeConstraints {
-            $0.leading.equalTo(transportBadgeButton)
+            $0.trailing.equalTo(transportBadgeButton)
             $0.bottom.equalTo(transportBadgeButton.snp.top).offset(-8)
-            $0.trailing.lessThanOrEqualToSuperview().inset(Layout.transportOverlayHorizontalInset)
+            $0.leading.greaterThanOrEqualToSuperview().inset(Layout.transportOverlayHorizontalInset)
             $0.width.lessThanOrEqualTo(Layout.transportOverlayMaxWidth)
         }
 

@@ -9,6 +9,15 @@
 import Foundation
 import AVFoundation
 
+/// Playback policy for an HLS resource.
+public enum SYPlayerHLSLatencyMode {
+    /// Uses AVPlayer's regular buffering policy.
+    case standard
+
+    /// Optimizes live playback for an LL-HLS playlist.
+    case lowLatency
+}
+
 public enum SYPlayerResourceSource {
     case hls(URL)
     case whep(endpointURL: URL, iceServers: [String])
@@ -63,6 +72,7 @@ public struct SYPlayerResource {
 public final class SYPlayerResourceVideo {
     public let url: URL
     public let source: SYPlayerResourceSource
+    public let hlsLatencyMode: SYPlayerHLSLatencyMode
     public var options: [String: Any]?
 
     /// Builds an AVURLAsset using the current player configuration.
@@ -71,15 +81,21 @@ public final class SYPlayerResourceVideo {
     }
 
     /// Creates a video wrapper with the given URL and optional AVURLAsset options.
-    public init(url: URL, options: [String: Any]? = nil) {
+    public init(
+        url: URL,
+        options: [String: Any]? = nil,
+        hlsLatencyMode: SYPlayerHLSLatencyMode = .standard
+    ) {
         self.url = url
         self.source = .hls(url)
+        self.hlsLatencyMode = hlsLatencyMode
         self.options = options
     }
 
     public init(whepEndpointURL: URL, iceServers: [String] = []) {
         self.url = whepEndpointURL
         self.source = .whep(endpointURL: whepEndpointURL, iceServers: iceServers)
+        self.hlsLatencyMode = .standard
         self.options = nil
     }
 }

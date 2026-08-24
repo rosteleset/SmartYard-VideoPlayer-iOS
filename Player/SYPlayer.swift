@@ -86,6 +86,9 @@ final class SYPlayer: UIView {
 
     private var isPortrait: Bool { bounds.height > bounds.width }
     private var currentVideo: SYPlayerResourceVideo? { resource?.video(at: currentVideoIndex) }
+    private var currentHLSTransport: SYPlayerTransport {
+        hlsTransport(for: currentVideo)
+    }
     private var isCurrentVideoWHEP: Bool {
         guard let currentVideo else { return false }
         if case .whep = currentVideo.source { return true }
@@ -404,7 +407,9 @@ final class SYPlayer: UIView {
     private func startHLSVideo(url: URL, autoPlay: Bool) {
         if resource?.videoType == .online {
             controlView.setTransportState(
-                isFallbackPlayback ? .switchingToHLS : .connecting(.hls)
+                isFallbackPlayback
+                    ? .switchingToHLS(currentHLSTransport)
+                    : .connecting(currentHLSTransport)
             )
         } else {
             controlView.setTransportState(.hidden)
@@ -416,7 +421,8 @@ final class SYPlayer: UIView {
         engine.set(
             url: url,
             autoPlay: autoPlay,
-            isLiveHLS: resource?.videoType == .online
+            isLiveHLS: resource?.videoType == .online,
+            hlsLatencyMode: currentVideo?.hlsLatencyMode ?? .standard
         )
     }
 
@@ -485,7 +491,9 @@ final class SYPlayer: UIView {
            case .hls = nextVideo.source {
             isFallbackPlayback = announceTransportSwitch
             if announceTransportSwitch {
-                controlView.setTransportState(.switchingToHLS)
+                controlView.setTransportState(
+                    .switchingToHLS(hlsTransport(for: nextVideo))
+                )
             }
         } else {
             isFallbackPlayback = false
@@ -498,6 +506,16 @@ final class SYPlayer: UIView {
         )
         startCurrentVideo(autoPlay: true)
         return true
+    }
+
+    private func hlsTransport(
+        for video: SYPlayerResourceVideo?
+    ) -> SYPlayerTransport {
+        guard let video else { return .hls }
+        if case .lowLatency = video.hlsLatencyMode {
+            return .lowLatencyHLS
+        }
+        return .hls
     }
 }
 
@@ -520,7 +538,10 @@ extension SYPlayer: SYPlayerEngineDelegate {
             if case .playing = state {
                 if resource?.videoType == .online {
                     controlView.setTransportState(
-                        .playing(.hls, announceConnection: isFallbackPlayback)
+                        .playing(
+                            currentHLSTransport,
+                            announceConnection: isFallbackPlayback
+                        )
                     )
                 }
                 isFallbackPlayback = false
@@ -534,7 +555,7 @@ extension SYPlayer: SYPlayerEngineDelegate {
             isPlayToTheEnd = true
         case .error:
             if resource?.videoType == .online {
-                controlView.setTransportState(.failed(.hls))
+                controlView.setTransportState(.failed(currentHLSTransport))
             }
             isFallbackPlayback = false
             isPlayToTheEnd = false
