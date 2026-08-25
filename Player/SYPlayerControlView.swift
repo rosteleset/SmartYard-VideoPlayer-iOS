@@ -543,56 +543,11 @@ final class SYPlayerControlView: UIView {
         case .hidden:
             hideTransportMessage()
 
-        case .connecting(.webRTC):
+        case .connecting(let transport), .switchingToHLS(let transport):
             showTransportMessage(
-                strings.connectingWebRTC,
-                accentColor: appearance.webRTCColor
+                strings.connecting,
+                accentColor: transportColor(for: transport)
             )
-
-        case .connecting(.hls):
-            showTransportMessage(
-                strings.connectingHLS,
-                accentColor: appearance.hlsColor
-            )
-
-        case .connecting(.lowLatencyHLS):
-            showTransportMessage(
-                strings.connectingLowLatencyHLS,
-                accentColor: appearance.hlsColor
-            )
-
-        case .switchingToHLS(.hls):
-            showTransportMessage(
-                strings.switchingToHLS,
-                accentColor: appearance.warningColor,
-                announce: true
-            )
-
-        case .switchingToHLS(.lowLatencyHLS):
-            showTransportMessage(
-                strings.switchingToLowLatencyHLS,
-                accentColor: appearance.warningColor,
-                announce: true
-            )
-
-        case .switchingToHLS(.webRTC):
-            hideTransportMessage()
-
-        case .playing(.hls, let announceConnection) where announceConnection:
-            showTransportMessage(
-                strings.connectedHLS,
-                accentColor: appearance.hlsColor,
-                announce: true
-            )
-            scheduleTransportMessageDismissal()
-
-        case .playing(.lowLatencyHLS, let announceConnection) where announceConnection:
-            showTransportMessage(
-                strings.connectedLowLatencyHLS,
-                accentColor: appearance.hlsColor,
-                announce: true
-            )
-            scheduleTransportMessageDismissal()
 
         case .playing:
             hideTransportMessage()

@@ -35,6 +35,13 @@ protocol SYPlayerEngineDelegate: AnyObject {
         _ engine: SYPlayerEngine,
         isPlayingDidChange isPlaying: Bool
     )
+
+    /// Called when AVPlayer records a media error-log entry.
+    func playerEngine(
+        _ engine: SYPlayerEngine,
+        didReceiveErrorStatusCode statusCode: Int,
+        comment: String?
+    )
 }
 
 final class SYPlayerEngine {
@@ -54,6 +61,9 @@ final class SYPlayerEngine {
     private var didRetryWithFreshAsset = false
     private var stallRecoveryAttempts = 0
     private var stallRecoveryWorkItem: DispatchWorkItem?
+
+    private(set) var lastErrorStatusCode: Int?
+    private(set) var lastErrorComment: String?
 
     // Time observer token
     private var timeObserverToken: Any?
@@ -123,6 +133,8 @@ final class SYPlayerEngine {
         hasStartedPlayback = false
         didRetryWithFreshAsset = false
         stallRecoveryAttempts = 0
+        lastErrorStatusCode = nil
+        lastErrorComment = nil
 
         load(url: url, autoPlay: autoPlay, allowWarmedAsset: true)
     }
@@ -548,8 +560,20 @@ private extension SYPlayerEngine {
     @objc func itemNewErrorLogEntry(_ notification: Notification) {
         guard let item = notification.object as? AVPlayerItem,
               self.item === item else { return }
-        logErrorLog(for: item, context: "new entry")
-        _ = retryWithFreshAssetIfNeeded(for: item, reason: "error log entry")
+        guard let event = logErrorLog(for: item, context: "new entry") else { return }
+        if retryWithFreshAssetIfNeeded(for: item, reason: "error log entry") {
+            return
+        }
+
+        let statusCode = event.errorStatusCode
+        let comment = event.errorComment
+        notifyDelegate { engine, delegate in
+            delegate.playerEngine(
+                engine,
+                didReceiveErrorStatusCode: statusCode,
+                comment: comment
+            )
+        }
     }
 
     @objc func itemNewAccessLogEntry(_ notification: Notification) {
@@ -909,25 +933,32 @@ private extension SYPlayerEngine {
         logAccessLog(for: item, context: "item failed")
     }
 
-    func logErrorLog(for item: AVPlayerItem, context: String) {
+    @discardableResult
+    func logErrorLog(
+        for item: AVPlayerItem,
+        context: String
+    ) -> AVPlayerItemErrorLogEvent? {
         guard let event = item.errorLog()?.events.last else {
             SYPlayerConfig.shared.log(
                 "Engine error log unavailable (\(context))",
                 level: .warning
             )
-            return
+            return nil
         }
 
         let comment = event.errorComment ?? "none"
         let uri = event.uri ?? "none"
         let server = event.serverAddress ?? "none"
         let session = event.playbackSessionID ?? "none"
+        lastErrorStatusCode = event.errorStatusCode
+        lastErrorComment = event.errorComment
         SYPlayerConfig.shared.log(
             "Engine error log (\(context)): domain=\(event.errorDomain), "
                 + "status=\(event.errorStatusCode), comment=\(comment), "
                 + "uri=\(uri), server=\(server), session=\(session)",
             level: .error
         )
+        return event
     }
 
     func logAccessLog(for item: AVPlayerItem, context: String) {

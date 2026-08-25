@@ -9,6 +9,7 @@
 import UIKit
 import SnapKit
 import AVFoundation
+import RxSwift
 
 protocol SYPlayerDelegate: AnyObject {
     /// Called when the player state changes.
@@ -45,6 +46,8 @@ protocol SYPlayerDelegate: AnyObject {
 }
 
 final class SYPlayer: UIView {
+
+    private static let lowLatencyManifestErrorStatusCode = -15415
 
     // MARK: - Public
     weak var delegate: SYPlayerDelegate?
@@ -83,11 +86,26 @@ final class SYPlayer: UIView {
     private var isItemLoaded: Bool = false
     private var didAnimateVideoFadeIn: Bool = false
     private var isFallbackPlayback = false
+    private var didFallbackFromLowLatencyHLS = false
+    private var didRetryLowLatencyHLSPlayback = false
+    private var resolvedHLSLatencyMode: SYPlayerHLSLatencyMode?
+    private var playbackDisposeBag = DisposeBag()
+    private let lowLatencyFirstFrameFallbackDisposable = SerialDisposable()
 
     private var isPortrait: Bool { bounds.height > bounds.width }
     private var currentVideo: SYPlayerResourceVideo? { resource?.video(at: currentVideoIndex) }
+    private var currentAutomaticLowLatencyVideo: SYPlayerResourceVideo? {
+        guard resource?.videoType == .online,
+              let currentVideo,
+              currentVideo.hlsLatencyMode == .automatic,
+              resolvedHLSLatencyMode == .lowLatency
+        else {
+            return nil
+        }
+        return currentVideo
+    }
     private var currentHLSTransport: SYPlayerTransport {
-        hlsTransport(for: currentVideo)
+        hlsTransport(for: currentVideo, resolvedMode: resolvedHLSLatencyMode)
     }
     private var isCurrentVideoWHEP: Bool {
         guard let currentVideo else { return false }
@@ -181,6 +199,8 @@ final class SYPlayer: UIView {
         )
         engine.stop()
         webRTCEngine.stop()
+        cancelLowLatencyFirstFrameFallback()
+        playbackDisposeBag = DisposeBag()
         self.resource = resource
         currentVideoIndex = videoIndex
 
@@ -189,6 +209,7 @@ final class SYPlayer: UIView {
         isItemLoaded = false
         isPauseByUser = false
         isFallbackPlayback = false
+        resetHLSFallbackState()
         prepareVideoForSmoothStart()
 
         controlView.configure(videoType: resource.videoType, hasSound: resource.hasSound)
@@ -205,6 +226,7 @@ final class SYPlayer: UIView {
                 level: .debug
             )
             SYPlayerConfig.shared.prefetch(urls: [hlsVideo.url], maxCount: 1)
+            inspectHLSManifestIfNeeded(for: hlsVideo)
         }
 
         let shouldAutoPlay = SYPlayerConfig.shared.shouldAutoPlay
@@ -254,6 +276,12 @@ final class SYPlayer: UIView {
         } else {
             SYPlayerConfig.shared.log("Player play existing item", level: .debug)
             engine.play()
+            if let currentVideo {
+                scheduleLowLatencyFirstFrameFallbackIfNeeded(
+                    for: currentVideo,
+                    autoPlay: true
+                )
+            }
         }
 
         isPauseByUser = false
@@ -262,6 +290,7 @@ final class SYPlayer: UIView {
     /// Pauses playback; if allowAutoPlay is true, treat it as temporary.
     func pause(allowAutoPlay allow: Bool = false) {
         SYPlayerConfig.shared.log("Player pause (allowAutoPlay: \(allow))", level: .debug)
+        cancelLowLatencyFirstFrameFallback()
         isCurrentVideoWHEP ? webRTCEngine.pause() : engine.pause()
         engine.player.isMuted = allow ? engine.player.isMuted : true
         isPauseByUser = !allow
@@ -347,6 +376,9 @@ final class SYPlayer: UIView {
     /// Releases resources and observers before deallocation.
     func prepareToDealloc() {
         SYPlayerConfig.shared.log("Player prepareToDealloc", level: .info)
+        cancelLowLatencyFirstFrameFallback()
+        lowLatencyFirstFrameFallbackDisposable.dispose()
+        playbackDisposeBag = DisposeBag()
         setControlsContainer(nil)
         engine.cleanup()
         webRTCEngine.cleanup()
@@ -385,9 +417,21 @@ final class SYPlayer: UIView {
         )
 
         switch video.source {
-        case .hls(let url):
-            startHLSVideo(url: url, autoPlay: autoPlay)
+        case .hls:
+            startHLSVideo(autoPlay: autoPlay)
         case .whep(let endpointURL, let iceServers):
+            if let nextVideo = resource?.video(at: currentVideoIndex + 1),
+               case .hls = nextVideo.source,
+               SYStreamTransportPreferenceStore.shared.preferredHLSMode(
+                   for: nextVideo.url
+               ) != nil {
+                SYPlayerConfig.shared.log(
+                    "Player skip WHEP in favor of the remembered HLS transport",
+                    level: .info
+                )
+                if fallbackToNextVideoIfPossible(announceTransportSwitch: false) { return }
+            }
+
             if let cooldown = SYWHEPCooldownStore.shared.activeCooldown(for: endpointURL),
                let nextVideo = resource?.video(at: currentVideoIndex + 1),
                case .hls = nextVideo.source {
@@ -404,7 +448,17 @@ final class SYPlayer: UIView {
         }
     }
 
-    private func startHLSVideo(url: URL, autoPlay: Bool) {
+    private func startHLSVideo(autoPlay: Bool) {
+        guard let video = currentVideo else { return }
+
+        webRTCEngine.stop()
+        webRTCEngine.rendererView.isHidden = true
+        playerLayer.isHidden = false
+        playerLayer.attach(player: engine.player)
+
+        let resolution = hlsResolution(for: video)
+        resolvedHLSLatencyMode = resolution.mode
+
         if resource?.videoType == .online {
             controlView.setTransportState(
                 isFallbackPlayback
@@ -414,19 +468,21 @@ final class SYPlayer: UIView {
         } else {
             controlView.setTransportState(.hidden)
         }
-        webRTCEngine.stop()
-        webRTCEngine.rendererView.isHidden = true
-        playerLayer.isHidden = false
-        playerLayer.attach(player: engine.player)
+
         engine.set(
-            url: url,
+            url: resolution.playbackURL,
             autoPlay: autoPlay,
             isLiveHLS: resource?.videoType == .online,
-            hlsLatencyMode: currentVideo?.hlsLatencyMode ?? .standard
+            hlsLatencyMode: resolution.mode
+        )
+        scheduleLowLatencyFirstFrameFallbackIfNeeded(
+            for: video,
+            autoPlay: autoPlay
         )
     }
 
     private func startWHEPVideo(endpointURL: URL, iceServers: [String], autoPlay: Bool) {
+        cancelLowLatencyFirstFrameFallback()
         isFallbackPlayback = false
         controlView.setTransportState(.connecting(.webRTC))
         engine.stop()
@@ -449,7 +505,18 @@ final class SYPlayer: UIView {
         guard playerLayer.isReadyForDisplay else { return }
         guard case .playing = engine.state else { return }
 
+        cancelLowLatencyFirstFrameFallback()
         didAnimateVideoFadeIn = true
+        recordSuccessfulHLSPlayback()
+        if resource?.videoType == .online {
+            controlView.setTransportState(
+                .playing(
+                    currentHLSTransport,
+                    announceConnection: isFallbackPlayback
+                )
+            )
+        }
+        isFallbackPlayback = false
         controlView.playbackDidBecomeVisible()
         UIView.animate(
             withDuration: 0.25,
@@ -486,6 +553,8 @@ final class SYPlayer: UIView {
         }
 
         currentVideoIndex += 1
+        cancelLowLatencyFirstFrameFallback()
+        resetHLSFallbackState()
         let nextVideo = resource.videos[currentVideoIndex]
         if case .whep = currentVideo.source,
            case .hls = nextVideo.source {
@@ -508,14 +577,259 @@ final class SYPlayer: UIView {
         return true
     }
 
-    private func hlsTransport(
-        for video: SYPlayerResourceVideo?
-    ) -> SYPlayerTransport {
-        guard let video else { return .hls }
-        if case .lowLatency = video.hlsLatencyMode {
-            return .lowLatencyHLS
+    private func fallbackFromLowLatencyHLSIfPossible() -> Bool {
+        guard !didFallbackFromLowLatencyHLS,
+              let video = currentAutomaticLowLatencyVideo
+        else {
+            return false
         }
-        return .hls
+
+        cancelLowLatencyFirstFrameFallback()
+        SYStreamTransportPreferenceStore.shared.recordLowLatencyFailure(
+            for: video.url,
+            cooldown: SYPlayerConfig.shared.lowLatencyHLSFailureCooldown,
+            preferenceDuration: SYPlayerConfig.shared.streamTransportPreferenceDuration
+        )
+        didFallbackFromLowLatencyHLS = true
+        resolvedHLSLatencyMode = .standard
+        isFallbackPlayback = true
+        prepareVideoForSmoothStart()
+        controlView.setTransportState(.switchingToHLS(.hls))
+        SYPlayerConfig.shared.log(
+            "Player LL-HLS failed; retrying the original standard HLS playlist",
+            level: .warning
+        )
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self, currentVideo === video else { return }
+            engine.set(
+                url: video.url,
+                autoPlay: true,
+                isLiveHLS: true,
+                hlsLatencyMode: .standard
+            )
+        }
+        return true
+    }
+
+    private func retryLowLatencyHLSAfterManifestFailureIfPossible(
+        reason: String
+    ) -> Bool {
+        guard !didRetryLowLatencyHLSPlayback,
+              !didFallbackFromLowLatencyHLS,
+              let video = currentAutomaticLowLatencyVideo
+        else {
+            return false
+        }
+
+        didRetryLowLatencyHLSPlayback = true
+        cancelLowLatencyFirstFrameFallback()
+        isFallbackPlayback = false
+        isItemLoaded = true
+        prepareVideoForSmoothStart()
+        controlView.setTransportState(.connecting(.lowLatencyHLS))
+        engine.stop()
+
+        SYPlayerConfig.shared.log(
+            "Player refreshing LL-HLS manifest before one retry "
+                + "(reason: \(reason))",
+            level: .warning
+        )
+
+        SYHLSManifestInspector.shared
+            .refresh(url: video.url, options: video.options)
+            .asObservable()
+            .subscribe(with: self) { owner, resolution in
+                guard owner.currentVideo === video else { return }
+                guard case .lowLatency = resolution.mode else {
+                    SYPlayerConfig.shared.log(
+                        "Player LL-HLS manifest remained invalid after retries",
+                        level: .warning
+                    )
+                    _ = owner.fallbackFromLowLatencyHLSIfPossible()
+                    return
+                }
+
+                owner.resolvedHLSLatencyMode = .lowLatency
+                SYStreamTransportPreferenceStore.shared.recordLowLatencyAvailability(
+                    for: video.url,
+                    duration: SYPlayerConfig.shared.streamTransportPreferenceDuration
+                )
+                owner.engine.set(
+                    url: resolution.playbackURL,
+                    autoPlay: true,
+                    isLiveHLS: true,
+                    hlsLatencyMode: .lowLatency
+                )
+                owner.scheduleLowLatencyFirstFrameFallbackIfNeeded(
+                    for: video,
+                    autoPlay: true
+                )
+            }
+            .disposed(by: playbackDisposeBag)
+        return true
+    }
+
+    private func scheduleLowLatencyFirstFrameFallbackIfNeeded(
+        for video: SYPlayerResourceVideo,
+        autoPlay: Bool
+    ) {
+        cancelLowLatencyFirstFrameFallback()
+        guard autoPlay, currentAutomaticLowLatencyVideo === video else {
+            return
+        }
+
+        let timeout = SYPlayerConfig.shared.lowLatencyHLSFirstFrameTimeout
+        guard timeout.isFinite, timeout > 0 else { return }
+
+        lowLatencyFirstFrameFallbackDisposable.disposable = Observable<Int>
+            .timer(
+                .milliseconds(Int(timeout * 1_000)),
+                scheduler: MainScheduler.instance
+            )
+            .subscribe(with: self) { owner, _ in
+                guard owner.currentVideo === video,
+                      !owner.didAnimateVideoFadeIn
+                else {
+                    return
+                }
+
+                SYPlayerConfig.shared.log(
+                    "Player LL-HLS first frame timed out after \(timeout)s",
+                    level: .warning
+                )
+                if owner.retryLowLatencyHLSForLastManifestErrorIfPossible() {
+                    return
+                }
+                _ = owner.fallbackFromLowLatencyHLSIfPossible()
+            }
+    }
+
+    private func cancelLowLatencyFirstFrameFallback() {
+        lowLatencyFirstFrameFallbackDisposable.disposable = Disposables.create()
+    }
+
+    private func retryLowLatencyHLSForLastManifestErrorIfPossible() -> Bool {
+        guard engine.lastErrorStatusCode == Self.lowLatencyManifestErrorStatusCode else {
+            return false
+        }
+        return retryLowLatencyHLSAfterManifestFailureIfPossible(
+            reason: engine.lastErrorComment
+                ?? "CoreMedia error \(Self.lowLatencyManifestErrorStatusCode)"
+        )
+    }
+
+    private func resetHLSFallbackState() {
+        didFallbackFromLowLatencyHLS = false
+        didRetryLowLatencyHLSPlayback = false
+        resolvedHLSLatencyMode = nil
+    }
+
+    private func hlsTransport(
+        for video: SYPlayerResourceVideo?,
+        resolvedMode: SYPlayerHLSLatencyMode? = nil
+    ) -> SYPlayerTransport {
+        (resolvedMode ?? video?.hlsLatencyMode) == .lowLatency ? .lowLatencyHLS : .hls
+    }
+
+    private func inspectHLSManifestIfNeeded(for video: SYPlayerResourceVideo) {
+        guard case .automatic = video.hlsLatencyMode else { return }
+        SYHLSManifestInspector.shared
+            .inspect(url: video.url, options: video.options)
+            .asObservable()
+            .subscribe(with: self) { _, resolution in
+                guard case .lowLatency = resolution.mode else { return }
+                SYStreamTransportPreferenceStore.shared.recordLowLatencyAvailability(
+                    for: video.url,
+                    duration: SYPlayerConfig.shared.streamTransportPreferenceDuration
+                )
+            }
+            .disposed(by: playbackDisposeBag)
+    }
+
+    private func hlsResolution(
+        for video: SYPlayerResourceVideo
+    ) -> SYHLSManifestResolution {
+        guard resource?.videoType == .online else {
+            return SYHLSManifestResolution(
+                playbackURL: video.url,
+                mode: .standard
+            )
+        }
+
+        guard case .automatic = video.hlsLatencyMode else {
+            return SYHLSManifestResolution(
+                playbackURL: video.url,
+                mode: video.hlsLatencyMode
+            )
+        }
+
+        let preferredMode = SYStreamTransportPreferenceStore.shared.preferredHLSMode(
+            for: video.url
+        )
+        if case .standard? = preferredMode {
+            SYPlayerConfig.shared.log(
+                "Player use remembered standard HLS transport",
+                level: .info
+            )
+            return SYHLSManifestResolution(
+                playbackURL: video.url,
+                mode: .standard
+            )
+        }
+
+        if let resolution = SYHLSManifestInspector.shared.cachedResolution(
+            url: video.url,
+            options: video.options
+        ) {
+            let transport = hlsTransport(for: video, resolvedMode: resolution.mode)
+            SYPlayerConfig.shared.log(
+                "Player resolved cached HLS transport: \(transport.title), "
+                    + "playlist: \(resolution.playbackURL.lastPathComponent)",
+                level: .info
+            )
+            return resolution
+        }
+
+        if case .lowLatency? = preferredMode {
+            let lowLatencyURL = SYHLSManifestInspector.shared.lowLatencyURL(
+                for: video.url
+            )
+            SYPlayerConfig.shared.log(
+                "Player use remembered LL-HLS transport",
+                level: .info
+            )
+            return SYHLSManifestResolution(
+                playbackURL: lowLatencyURL,
+                mode: .lowLatency
+            )
+        }
+
+        SYPlayerConfig.shared.log(
+            "Player HLS inspection is still running; starting standard HLS without delay",
+            level: .info
+        )
+        return SYHLSManifestResolution(
+            playbackURL: video.url,
+            mode: .standard
+        )
+    }
+
+    private func recordSuccessfulHLSPlayback() {
+        guard let video = currentVideo,
+              case .hls = video.source
+        else {
+            return
+        }
+
+        let mode: SYPreferredHLSMode = resolvedHLSLatencyMode == .lowLatency
+            ? .lowLatency
+            : .standard
+        SYStreamTransportPreferenceStore.shared.recordSuccessfulPlayback(
+            mode,
+            for: video.url,
+            duration: SYPlayerConfig.shared.streamTransportPreferenceDuration
+        )
     }
 }
 
@@ -526,8 +840,12 @@ extension SYPlayer: SYPlayerEngineDelegate {
         _ engine: SYPlayerEngine,
         stateDidChange state: SYPlayerState
     ) {
-        if case .error = state, fallbackToNextVideoIfPossible() {
-            return
+        if case .error = state {
+            if retryLowLatencyHLSForLastManifestErrorIfPossible() {
+                return
+            }
+            if fallbackFromLowLatencyHLSIfPossible() { return }
+            if fallbackToNextVideoIfPossible() { return }
         }
 
         controlView.playerStateDidChange(state: state)
@@ -536,15 +854,6 @@ extension SYPlayer: SYPlayerEngineDelegate {
         switch state {
         case .ready, .playing:
             if case .playing = state {
-                if resource?.videoType == .online {
-                    controlView.setTransportState(
-                        .playing(
-                            currentHLSTransport,
-                            announceConnection: isFallbackPlayback
-                        )
-                    )
-                }
-                isFallbackPlayback = false
                 revealVideoIfNeeded()
             }
             if playerLayer.isReadyForDisplay {
@@ -599,6 +908,17 @@ extension SYPlayer: SYPlayerEngineDelegate {
     ) {
         controlView.playStateDidChange(isPlaying: isPlaying)
         delegate?.syPlayer(player: self, playerIsPlaying: isPlaying)
+    }
+
+    func playerEngine(
+        _ engine: SYPlayerEngine,
+        didReceiveErrorStatusCode statusCode: Int,
+        comment: String?
+    ) {
+        guard statusCode == Self.lowLatencyManifestErrorStatusCode else { return }
+        _ = retryLowLatencyHLSAfterManifestFailureIfPossible(
+            reason: comment ?? "CoreMedia error \(statusCode)"
+        )
     }
 }
 

@@ -21,17 +21,18 @@ final class SYWHEPCooldownStore {
     }
 
     private let queue = DispatchQueue(label: "sy.player.whep-cooldown")
-    private var entries: [URL: Entry] = [:]
+    private var entries: [String: Entry] = [:]
 
     private init() {}
 
     func activeCooldown(for endpointURL: URL) -> SYWHEPCooldown? {
         queue.sync {
-            guard let entry = entries[endpointURL] else { return nil }
+            let key = endpointURL.syTransportCacheKey
+            guard let entry = entries[key] else { return nil }
 
             let remaining = entry.expiresAt.timeIntervalSinceNow
             guard remaining > 0 else {
-                entries.removeValue(forKey: endpointURL)
+                entries.removeValue(forKey: key)
                 return nil
             }
 
@@ -41,12 +42,13 @@ final class SYWHEPCooldownStore {
 
     func recordFailure(endpointURL: URL, reason: String, duration: TimeInterval) {
         queue.sync {
+            let key = endpointURL.syTransportCacheKey
             guard duration > 0 else {
-                entries.removeValue(forKey: endpointURL)
+                entries.removeValue(forKey: key)
                 return
             }
 
-            entries[endpointURL] = Entry(
+            entries[key] = Entry(
                 expiresAt: Date().addingTimeInterval(duration),
                 reason: reason
             )
@@ -56,7 +58,7 @@ final class SYWHEPCooldownStore {
     @discardableResult
     func clear(endpointURL: URL) -> Bool {
         queue.sync {
-            entries.removeValue(forKey: endpointURL) != nil
+            entries.removeValue(forKey: endpointURL.syTransportCacheKey) != nil
         }
     }
 }

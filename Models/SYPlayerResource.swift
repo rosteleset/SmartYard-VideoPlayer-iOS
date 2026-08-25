@@ -10,7 +10,10 @@ import Foundation
 import AVFoundation
 
 /// Playback policy for an HLS resource.
-public enum SYPlayerHLSLatencyMode {
+public enum SYPlayerHLSLatencyMode: Equatable {
+    /// Inspects the media playlist and selects the matching buffering policy.
+    case automatic
+
     /// Uses AVPlayer's regular buffering policy.
     case standard
 
@@ -84,7 +87,7 @@ public final class SYPlayerResourceVideo {
     public init(
         url: URL,
         options: [String: Any]? = nil,
-        hlsLatencyMode: SYPlayerHLSLatencyMode = .standard
+        hlsLatencyMode: SYPlayerHLSLatencyMode = .automatic
     ) {
         self.url = url
         self.source = .hls(url)
