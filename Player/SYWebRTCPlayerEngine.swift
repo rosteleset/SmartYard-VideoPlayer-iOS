@@ -428,9 +428,11 @@ private extension SYWebRTCPlayerEngine {
         defer { rtcAudioSession.unlockForConfiguration() }
 
         do {
-            try rtcAudioSession.setCategory(.playAndRecord)
-            try rtcAudioSession.setMode(.videoChat)
-            try rtcAudioSession.overrideOutputAudioPort(.speaker)
+            try rtcAudioSession.setCategory(
+                .playAndRecord,
+                mode: .videoChat,
+                options: [.defaultToSpeaker, .allowBluetoothA2DP]
+            )
             if !isAudioSessionActive {
                 try rtcAudioSession.setActive(true)
                 isAudioSessionActive = true
