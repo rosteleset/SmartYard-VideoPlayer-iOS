@@ -452,6 +452,7 @@ final class SYPlayer: UIView {
         guard let video = currentVideo else { return }
 
         webRTCEngine.stop()
+        configureHLSAudioSession()
         webRTCEngine.rendererView.isHidden = true
         playerLayer.isHidden = false
         playerLayer.attach(player: engine.player)
@@ -479,6 +480,20 @@ final class SYPlayer: UIView {
             for: video,
             autoPlay: autoPlay
         )
+    }
+
+    private func configureHLSAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playback,
+                mode: .moviePlayback
+            )
+        } catch {
+            SYPlayerConfig.shared.log(
+                "HLS audio session configuration failed: \(error.localizedDescription)",
+                level: .error
+            )
+        }
     }
 
     private func startWHEPVideo(endpointURL: URL, iceServers: [String], autoPlay: Bool) {
