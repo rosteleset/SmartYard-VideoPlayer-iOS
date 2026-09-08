@@ -316,8 +316,7 @@ private extension SYPlayerEngine {
             return
         }
 
-        player.automaticallyWaitsToMinimizeStalling =
-            config.lowLatencyHLSAutomaticallyWaitsToMinimizeStalling
+        player.automaticallyWaitsToMinimizeStalling = true
         item.preferredForwardBufferDuration = max(
             0,
             config.lowLatencyHLSPreferredForwardBufferDuration

@@ -126,8 +126,12 @@ public final class SYPlayerConfig {
     /// Forward buffer used for live LL-HLS playback.
     public var lowLatencyHLSPreferredForwardBufferDuration: TimeInterval = 1
 
-    /// Whether LL-HLS starts immediately instead of waiting to minimize stalls.
-    public var lowLatencyHLSAutomaticallyWaitsToMinimizeStalling: Bool = false
+    /// LL-HLS always waits for enough buffered media to avoid a startup race.
+    @available(*, deprecated, message: "LL-HLS always waits for its startup buffer.")
+    public var lowLatencyHLSAutomaticallyWaitsToMinimizeStalling: Bool {
+        get { true }
+        set { _ = newValue }
+    }
 
     /// Optional fixed distance from the live edge. Nil follows AVFoundation's recommendation.
     public var lowLatencyHLSTargetLiveOffset: TimeInterval?
