@@ -50,6 +50,7 @@ public struct SYPlayerTransportAppearance {
 public struct SYPlayerTransportStrings {
     public var connecting: String
     public var connectingWebRTC: String
+    public var connectingLowLatencyHLS: String
     public var connectingHLS: String
     public var switchingToHLS: String
     public var connectedHLS: String
@@ -57,20 +58,26 @@ public struct SYPlayerTransportStrings {
     public var webRTCInfo: String
     public var hlsInfo: String
     public var lowLatencyHLSInfo: String
+    public var lowLatencyDelay: String
+    public var hlsDelay: String
 
     public init(
         connecting: String = "Connecting…",
         connectingWebRTC: String = "Connecting via WebRTC…",
+        connectingLowLatencyHLS: String = "Connecting via LL-HLS…",
         connectingHLS: String = "Connecting via HLS…",
         switchingToHLS: String = "WebRTC is unavailable. Connecting via HLS…",
         connectedHLS: String = "Connected via HLS",
         videoUnavailable: String = "Unable to load video",
-        webRTCInfo: String = "Video is delivered via WebRTC. This method usually provides lower latency.",
-        hlsInfo: String = "HLS uses buffering, which can smooth brief network interruptions. A delay from real time is possible.",
-        lowLatencyHLSInfo: String = "Low-latency video delivery."
+        webRTCInfo: String = "Video is delivered via WebRTC",
+        hlsInfo: String = "Video is delivered via HLS",
+        lowLatencyHLSInfo: String = "Video is delivered via LL-HLS",
+        lowLatencyDelay: String = "~1s",
+        hlsDelay: String = "~6–16s"
     ) {
         self.connecting = connecting
         self.connectingWebRTC = connectingWebRTC
+        self.connectingLowLatencyHLS = connectingLowLatencyHLS
         self.connectingHLS = connectingHLS
         self.switchingToHLS = switchingToHLS
         self.connectedHLS = connectedHLS
@@ -78,6 +85,8 @@ public struct SYPlayerTransportStrings {
         self.webRTCInfo = webRTCInfo
         self.hlsInfo = hlsInfo
         self.lowLatencyHLSInfo = lowLatencyHLSInfo
+        self.lowLatencyDelay = lowLatencyDelay
+        self.hlsDelay = hlsDelay
     }
 }
 
@@ -123,15 +132,17 @@ public final class SYPlayerConfig {
     /// Whether regular HLS playback waits for enough buffered media to minimize stalls.
     public var automaticallyWaitsToMinimizeStalling: Bool = true
 
+    /// Forward buffer used for regular live HLS playback.
+    public var liveHLSPreferredForwardBufferDuration: TimeInterval = 1
+
+    /// Whether regular live HLS waits for a larger startup buffer before playing.
+    public var liveHLSWaitsToMinimizeStalling: Bool = false
+
     /// Forward buffer used for live LL-HLS playback.
     public var lowLatencyHLSPreferredForwardBufferDuration: TimeInterval = 1
 
-    /// LL-HLS always waits for enough buffered media to avoid a startup race.
-    @available(*, deprecated, message: "LL-HLS always waits for its startup buffer.")
-    public var lowLatencyHLSAutomaticallyWaitsToMinimizeStalling: Bool {
-        get { true }
-        set { _ = newValue }
-    }
+    /// Whether LL-HLS waits for a larger startup buffer before playing.
+    public var lowLatencyHLSAutomaticallyWaitsToMinimizeStalling: Bool = false
 
     /// Optional fixed distance from the live edge. Nil follows AVFoundation's recommendation.
     public var lowLatencyHLSTargetLiveOffset: TimeInterval?
@@ -160,14 +171,38 @@ public final class SYPlayerConfig {
     /// Do we allow streaming resources when paused?
     public var allowNetworkResourcesWhilePaused: Bool = true
 
-    /// Time to skip WHEP after a failed attempt.
+    /// Time to skip WHEP after a non-transient HTTP rejection.
     public var whepCooldownDuration: TimeInterval = 60
 
-    /// Maximum time for the WHEP HTTP, SDP, and ICE handshake.
-    public var whepHandshakeTimeout: TimeInterval = 2
+    /// Time to skip WHEP after a transient network or server failure.
+    public var whepTransientFailureCooldownDuration: TimeInterval = 5
 
-    /// Maximum time to receive the first video frame after the WHEP handshake.
-    public var whepFirstFrameTimeout: TimeInterval = 1.25
+    /// Kept for source compatibility. Transport selection now uses first-frame readiness.
+    @available(*, deprecated, message: "Use transportRaceDecisionTimeout instead.")
+    public var whepPriorityWindow: TimeInterval = 1
+
+    /// Maximum initial wait for a low-latency frame before committing to the best
+    /// already-ready transport. The safety deadline may remain longer for WHEP.
+    public var transportRaceDecisionTimeout: TimeInterval = 4
+
+    /// Shorter safety timeout used by the single fresh retry of a transport race.
+    public var transportRaceRetryDecisionTimeout: TimeInterval = 4
+
+    /// Number of complete fresh transport-race retries before reporting failure.
+    public var transportRaceMaxFullRetries: Int = 1
+
+    /// Maximum time to gather ICE candidates before sending the WHEP offer.
+    public var whepIceGatheringTimeout: TimeInterval = 0.5
+
+    /// Maximum time for SDP and ICE negotiation after the WHEP offer is sent.
+    public var whepHandshakeTimeout: TimeInterval = 4
+
+    /// Maximum time to receive the HTTP response to a WHEP offer.
+    public var whepRequestTimeout: TimeInterval = 4
+
+    /// Maximum time to receive the first decodable frame after the WHEP handshake.
+    /// This should exceed the longest expected video keyframe interval.
+    public var whepFirstFrameTimeout: TimeInterval = 3
 
     /// Time without live HLS progress before attempting recovery.
     public var liveHLSStallRecoveryTimeout: TimeInterval = 2.5
@@ -178,7 +213,7 @@ public final class SYPlayerConfig {
     /// Time allowed for a recovery seek before recreating the live HLS item.
     public var liveHLSPostSeekRecoveryTimeout: TimeInterval = 0.75
 
-    /// Maximum recovery actions for one continuous live HLS stall.
+    /// Maximum reloads before the final first-frame watchdog reports an HLS startup error.
     public var liveHLSMaxStallRecoveryAttempts: Int = 2
 
     // MARK: - Assets
@@ -218,7 +253,8 @@ public final class SYPlayerConfig {
         guard allowLogs || level.isAlwaysEnabled else { return }
         let timestamp = Self.logTimestamp()
         let caller = Self.logCaller(file: file, function: function, line: line)
-        let formatted = "\(timestamp) \(caller) \(level.label): \(message)"
+        let safeMessage = Self.redactSensitiveLogData(in: message)
+        let formatted = "\(timestamp) \(caller) \(level.label): \(safeMessage)"
         if let logger {
             logger(formatted)
         } else {
@@ -272,6 +308,49 @@ public final class SYPlayerConfig {
 
     private static let logDateFormatterLock = NSLock()
 
+    private static let sensitiveLogRedactionRules: [
+        (expression: NSRegularExpression, template: String)
+    ] = {
+        let rules = [
+            (
+                #"(\"(?:[a-z0-9_-]*token|password|passcode|secret|api[_-]?key|authorization|cookie|wmsauthsign|doorcode|accesscode|pin|sid)\"\s*:\s*\")[^\"]*(\")"#,
+                "$1<redacted>$2"
+            ),
+            (
+                #"((?:authorization|proxy-authorization)\s*[:=]\s*bearer\s+)[^,\]\s\"]+"#,
+                "$1<redacted>"
+            ),
+            (
+                #"((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key)\s*[:=]\s*)(?!bearer\b)[^,\]\s\"]+"#,
+                "$1<redacted>"
+            ),
+            (
+                #"((?:[a-z0-9_-]*token|password|passcode|secret|api[_-]?key|wmsauthsign|doorcode|accesscode|pin|sid)\s*[:=]\s*(?:optional\()?['\"]?)[^,'\"\)\]\s&]+(['\"]?\)?)"#,
+                "$1<redacted>$2"
+            ),
+            (
+                #"([?&](?:[a-z0-9_-]*token|password|passcode|secret|api[_-]?key|auth|signature|wmsauthsign|doorcode|accesscode|pin|sid)=)[^&\s\"'\\]*"#,
+                "$1<redacted>"
+            ),
+            (
+                #"((?:got new token|registration token:|register with voip token)\s*(?:optional\()?)[^)\s,]+(\)?)"#,
+                "$1<redacted>$2"
+            ),
+            (#"(token\s+for\s+[^:]+:\s*)\S+"#, "$1<redacted>")
+        ]
+
+        return rules.compactMap { rule in
+            let (pattern, template) = rule
+            guard let expression = try? NSRegularExpression(
+                pattern: pattern,
+                options: [.caseInsensitive]
+            ) else {
+                return nil
+            }
+            return (expression, template)
+        }
+    }()
+
     private static func logTimestamp() -> String {
         logDateFormatterLock.lock()
         defer { logDateFormatterLock.unlock() }
@@ -281,5 +360,16 @@ public final class SYPlayerConfig {
     private static func logCaller(file: String, function: String, line: Int) -> String {
         let fileName = (file as NSString).lastPathComponent
         return "\(fileName):\(line) \(function)"
+    }
+
+    private static func redactSensitiveLogData(in message: String) -> String {
+        sensitiveLogRedactionRules.reduce(message) { result, rule in
+            let range = NSRange(result.startIndex..., in: result)
+            return rule.expression.stringByReplacingMatches(
+                in: result,
+                range: range,
+                withTemplate: rule.template
+            )
+        }
     }
 }

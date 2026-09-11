@@ -21,59 +21,134 @@ protocol SYWebRTCPlayerEngineDelegate: AnyObject {
     )
 }
 
+private final class SYVideoDecoderFactory: NSObject, RTCVideoDecoderFactory {
+    private let base = RTCDefaultVideoDecoderFactory()
+
+    func supportedCodecs() -> [RTCVideoCodecInfo] {
+        var codecs = base.supportedCodecs()
+        let additionalH264Profiles = [
+            "42001f", // Baseline, Level 3.1
+            "4d001f", // Main, Level 3.1
+            "64001f"  // High, Level 3.1
+        ]
+
+        for profile in additionalH264Profiles {
+            let isAlreadyPresent = codecs.contains { codec in
+                codec.name.caseInsensitiveCompare(kRTCVideoCodecH264Name) == .orderedSame
+                    && codec.parameters["profile-level-id"]?.lowercased() == profile
+                    && codec.parameters["packetization-mode"] == "1"
+            }
+            guard !isAlreadyPresent else { continue }
+
+            codecs.append(
+                RTCVideoCodecInfo(
+                    name: kRTCVideoCodecH264Name,
+                    parameters: [
+                        "profile-level-id": profile,
+                        "packetization-mode": "1",
+                        "level-asymmetry-allowed": "1"
+                    ]
+                )
+            )
+        }
+
+        return codecs
+    }
+
+    func createDecoder(_ info: RTCVideoCodecInfo) -> RTCVideoDecoder? {
+        base.createDecoder(info)
+    }
+}
+
+/// Invalidated synchronously by the UI; checked by queued work and delegate deliveries.
+private final class SYWebRTCPlaybackToken {
+    private let lock = NSLock()
+    private var active = true
+
+    var isActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return active
+    }
+
+    func invalidate() {
+        lock.lock()
+        active = false
+        lock.unlock()
+    }
+}
+
 private final class SYWebRTCVideoFrameRenderer: NSObject, RTCVideoRenderer {
     private let rendererView: RTCMTLVideoView
     private let onVideoDidStart: () -> Void
-
+    private let playbackToken: SYWebRTCPlaybackToken
+    private let lock = NSLock()
+    private var isActive = true
     private var didReportVideoStart = false
 
     init(
         rendererView: RTCMTLVideoView,
+        playbackToken: SYWebRTCPlaybackToken,
         onVideoDidStart: @escaping () -> Void
     ) {
         self.rendererView = rendererView
+        self.playbackToken = playbackToken
         self.onVideoDidStart = onVideoDidStart
         super.init()
     }
 
-    func reset() {
-        didReportVideoStart = false
+    func invalidate() {
+        lock.lock()
+        isActive = false
+        lock.unlock()
     }
 
     func setSize(_ size: CGSize) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard isActive, playbackToken.isActive else { return }
         rendererView.setSize(size)
     }
 
     func renderFrame(_ frame: RTCVideoFrame?) {
-        rendererView.renderFrame(frame)
-
-        guard frame != nil, !didReportVideoStart else { return }
-
-        didReportVideoStart = true
-        DispatchQueue.main.async { [onVideoDidStart] in
-            onVideoDidStart()
+        lock.lock()
+        guard isActive, playbackToken.isActive else {
+            lock.unlock()
+            return
         }
+        rendererView.renderFrame(frame)
+        let shouldReportStart = frame != nil && !didReportVideoStart
+        if shouldReportStart { didReportVideoStart = true }
+        lock.unlock()
+        if shouldReportStart { onVideoDidStart() }
     }
 }
 
 final class SYWebRTCPlayerEngine: NSObject {
+    // Peer connection calls and RTCAudioSession locks may block. Serialize them away
+    // from UIKit, including across engine instances sharing the process audio session.
+    private static let connectionQueue = DispatchQueue(
+        label: "SmartYardVideoPlayer.WebRTC.connection",
+        qos: .userInitiated
+    )
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
         return RTCPeerConnectionFactory(
             encoderFactory: RTCDefaultVideoEncoderFactory(),
-            decoderFactory: RTCDefaultVideoDecoderFactory()
+            decoderFactory: SYVideoDecoderFactory()
         )
     }()
 
     weak var delegate: SYWebRTCPlayerEngineDelegate?
 
     let rendererView = RTCMTLVideoView()
-    private lazy var videoFrameRenderer = SYWebRTCVideoFrameRenderer(
-        rendererView: rendererView,
-        onVideoDidStart: { [weak self] in
-            self?.handleVideoDidStart()
-        }
-    )
+    // Main-thread state exposed to SYPlayer. All connection fields below are queue-confined.
+    private(set) var isPlaying = false
+    private var playbackToken = SYWebRTCPlaybackToken()
+
+    private var connectionToken = SYWebRTCPlaybackToken()
+    private var connectionID = UUID()
+    private var videoFrameRenderer: SYWebRTCVideoFrameRenderer?
 
     private var peerConnection: RTCPeerConnection?
     private var remoteVideoTrack: RTCVideoTrack?
@@ -89,28 +164,31 @@ final class SYWebRTCPlayerEngine: NSObject {
     private var audioStatsWorkItem: DispatchWorkItem?
     private var currentEndpointURL: URL?
     private var currentIceServers: [String] = []
-    private var shouldPlayAfterSetup = false
+    private var shouldEnforceFirstFrameTimeout = true
     private var isMuted = true
     private var hasCompletedHandshake = false
 
-    private(set) var state: SYPlayerState = .idle {
+    private var state: SYPlayerState = .idle {
         didSet {
             guard oldValue != state else { return }
             SYPlayerConfig.shared.log(
                 "WebRTC engine state changed from \(oldValue) to \(state)",
                 level: stateLogLevel
             )
+            let state = state
             notifyDelegate { engine, delegate in
-                delegate.webRTCPlayerEngine(engine, stateDidChange: engine.state)
+                delegate.webRTCPlayerEngine(engine, stateDidChange: state)
             }
         }
     }
 
-    private(set) var isPlaying = false {
+    private var isConnectionPlaying = false {
         didSet {
-            guard oldValue != isPlaying else { return }
+            guard oldValue != isConnectionPlaying else { return }
+            let playing = isConnectionPlaying
             notifyDelegate { engine, delegate in
-                delegate.webRTCPlayerEngine(engine, isPlayingDidChange: engine.isPlaying)
+                engine.isPlaying = playing
+                delegate.webRTCPlayerEngine(engine, isPlayingDidChange: playing)
             }
         }
     }
@@ -127,71 +205,93 @@ final class SYWebRTCPlayerEngine: NSObject {
     }
 
     deinit {
-        cleanup()
+        playbackToken.invalidate()
+        offerTask?.cancel()
+        iceGatheringTimeoutWorkItem?.cancel()
+        handshakeTimeoutWorkItem?.cancel()
+        firstFrameTimeoutWorkItem?.cancel()
+        audioStatsWorkItem?.cancel()
+        // Do not capture a deinitializing engine or synchronously wait for RTC threads.
+        let connection = peerConnection
+        let track = remoteVideoTrack
+        let renderer = videoFrameRenderer
+        let rendererView = rendererView
+        let audioSession = rtcAudioSession
+        let audioSessionWasActive = isAudioSessionActive
+        Self.connectionQueue.async {
+            renderer?.invalidate()
+            if let renderer { track?.remove(renderer) }
+            connection?.delegate = nil
+            connection?.close()
+            if audioSessionWasActive {
+                Self.deactivateAudioSession(audioSession)
+            }
+            // Queued commands can release the last engine reference off-main.
+            // Keep UIKit objects alive until they can be released on the UI thread.
+            DispatchQueue.main.async {
+                withExtendedLifetime(renderer) {}
+                withExtendedLifetime(rendererView) {}
+            }
+        }
     }
 
-    func set(endpointURL: URL, iceServers: [String], autoPlay: Bool) {
+    func set(
+        endpointURL: URL,
+        iceServers: [String],
+        autoPlay: Bool,
+        enforceFirstFrameTimeout: Bool = true
+    ) {
         SYPlayerConfig.shared.log(
             "WebRTC engine set endpoint: \(endpointURL.absoluteString), autoPlay: \(autoPlay)",
             level: .info
         )
-        currentEndpointURL = endpointURL
-        currentIceServers = iceServers
-        shouldPlayAfterSetup = autoPlay
-
-        cleanupConnection()
-        state = .preparing
-
-        guard autoPlay else {
-            state = .ready(duration: 0)
-            return
+        let token = replacePlaybackToken()
+        Self.connectionQueue.async { [self] in
+            connectionToken = token
+            cleanupConnection()
+            // Preserve the selected endpoint even if a rapid pause superseded setup;
+            // a following play must resume this camera, not the previous one.
+            currentEndpointURL = endpointURL
+            currentIceServers = iceServers
+            shouldEnforceFirstFrameTimeout = enforceFirstFrameTimeout
+            guard token.isActive else { return }
+            state = .preparing
+            if autoPlay {
+                startConnection()
+            } else {
+                state = .ready(duration: 0)
+            }
         }
-
-        startConnection()
     }
 
     func play() {
-        guard currentEndpointURL != nil else { return }
-        shouldPlayAfterSetup = true
-
-        if case .paused = state {
-            startConnection()
-            return
-        }
-
-        if case .idle = state {
-            startConnection()
-            return
-        }
-
-        if peerConnection == nil {
-            startConnection()
+        dispatchPrecondition(condition: .onQueue(.main))
+        let token = playbackToken
+        Self.connectionQueue.async { [self] in
+            guard token.isActive, currentEndpointURL != nil else { return }
+            if peerConnection == nil { startConnection() }
         }
     }
 
     func setMuted(_ muted: Bool) {
-        isMuted = muted
-        remoteAudioTrack?.isEnabled = !muted
-        SYPlayerConfig.shared.log(
-            "WebRTC engine setMuted: \(muted), hasAudioTrack: \(remoteAudioTrack != nil)",
-            level: .debug
-        )
+        Self.connectionQueue.async { [self] in
+            isMuted = muted
+            remoteAudioTrack?.isEnabled = !muted
+            SYPlayerConfig.shared.log(
+                "WebRTC engine setMuted: \(muted), hasAudioTrack: \(remoteAudioTrack != nil)",
+                level: .debug
+            )
+        }
     }
 
     func pause() {
         SYPlayerConfig.shared.log("WebRTC engine pause", level: .debug)
-        shouldPlayAfterSetup = false
-        cleanupConnection()
-        isPlaying = false
-        state = .paused
+        stopConnection(state: .paused)
     }
 
     func stop() {
         SYPlayerConfig.shared.log("WebRTC engine stop", level: .info)
-        shouldPlayAfterSetup = false
-        cleanupConnection()
-        isPlaying = false
-        state = .idle
+        stopConnection(state: .idle)
     }
 
     func cleanup() {
@@ -200,12 +300,30 @@ final class SYWebRTCPlayerEngine: NSObject {
 }
 
 private extension SYWebRTCPlayerEngine {
+    func replacePlaybackToken() -> SYWebRTCPlaybackToken {
+        dispatchPrecondition(condition: .onQueue(.main))
+        playbackToken.invalidate()
+        playbackToken = SYWebRTCPlaybackToken()
+        isPlaying = false
+        return playbackToken
+    }
+
+    func stopConnection(state: SYPlayerState) {
+        let token = replacePlaybackToken()
+        Self.connectionQueue.async { [self] in
+            connectionToken = token
+            cleanupConnection()
+            isConnectionPlaying = false
+            self.state = state
+        }
+    }
+
     func startConnection() {
-        guard let endpointURL = currentEndpointURL else { return }
+        dispatchPrecondition(condition: .onQueue(Self.connectionQueue))
+        guard connectionToken.isActive, let endpointURL = currentEndpointURL else { return }
 
         cleanupConnection()
         state = .preparing
-        scheduleHandshakeTimeout()
 
         let config = RTCConfiguration()
         let filteredIceServers = currentIceServers.filter { !$0.isEmpty && $0 != "none:" }
@@ -229,6 +347,20 @@ private extension SYWebRTCPlayerEngine {
 
         self.peerConnection = peerConnection
         configureAudioSession()
+
+        let connectionID = connectionID
+        let videoFrameRenderer = SYWebRTCVideoFrameRenderer(
+            rendererView: rendererView,
+            playbackToken: connectionToken,
+            onVideoDidStart: { [weak self] in
+                Self.connectionQueue.async { [weak self] in
+                    guard let self, self.connectionID == connectionID,
+                          self.connectionToken.isActive else { return }
+                    self.handleVideoDidStart()
+                }
+            }
+        )
+        self.videoFrameRenderer = videoFrameRenderer
 
         let videoInitOptions = RTCRtpTransceiverInit()
         videoInitOptions.direction = .recvOnly
@@ -255,40 +387,30 @@ private extension SYWebRTCPlayerEngine {
         )
 
         peerConnection.offer(for: offerConstraints) { [weak self] sdp, error in
-            guard let self else { return }
-
-            if let error {
-                self.fail(error.localizedDescription)
-                return
-            }
-
-            guard let sdp else {
-                self.fail("Local SDP offer is empty")
-                return
-            }
-
-            SYPlayerConfig.shared.log(
-                "WebRTC offer contains audio: \(sdp.sdp.contains("m=audio"))",
-                level: .debug
-            )
-            SYPlayerConfig.shared.log(
-                "WebRTC offer audio SDP: \(self.audioMediaSummary(from: sdp.sdp))",
-                level: .debug
-            )
-
-            peerConnection.setLocalDescription(sdp) { [weak self] error in
-                guard let self else { return }
-
+            self?.perform(for: peerConnection) { engine in
                 if let error {
-                    self.fail(error.localizedDescription)
+                    engine.fail(error.localizedDescription)
                     return
                 }
-
-                DispatchQueue.main.async { [weak self] in
-                    self?.scheduleOfferAfterIceGathering(
-                        fallbackOffer: sdp,
-                        endpointURL: endpointURL
-                    )
+                guard let sdp else {
+                    engine.fail("Local SDP offer is empty")
+                    return
+                }
+                SYPlayerConfig.shared.log(
+                    "WebRTC offer audio SDP: \(engine.audioMediaSummary(from: sdp.sdp))",
+                    level: .debug
+                )
+                peerConnection.setLocalDescription(sdp) { [weak engine] error in
+                    engine?.perform(for: peerConnection) { engine in
+                        if let error {
+                            engine.fail(error.localizedDescription)
+                            return
+                        }
+                        engine.scheduleOfferAfterIceGathering(
+                            fallbackOffer: sdp,
+                            endpointURL: endpointURL
+                        )
+                    }
                 }
             }
         }
@@ -307,15 +429,21 @@ private extension SYWebRTCPlayerEngine {
             return
         }
 
+        let timeout = max(0, SYPlayerConfig.shared.whepIceGatheringTimeout)
+        guard timeout > 0 else {
+            sendPendingOffer()
+            return
+        }
+
         let workItem = DispatchWorkItem { [weak self] in
             self?.sendPendingOffer()
         }
         iceGatheringTimeoutWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
+        Self.connectionQueue.asyncAfter(deadline: .now() + timeout, execute: workItem)
     }
 
     func sendPendingOffer() {
-        guard let fallbackOffer = pendingOffer,
+        guard connectionToken.isActive, let fallbackOffer = pendingOffer,
               let endpointURL = pendingOfferEndpointURL else { return }
 
         iceGatheringTimeoutWorkItem?.cancel()
@@ -335,72 +463,83 @@ private extension SYWebRTCPlayerEngine {
             "WebRTC gathered offer audio SDP: \(audioMediaSummary(from: offer.sdp))",
             level: .debug
         )
+        scheduleHandshakeTimeout()
         sendOffer(offer, endpointURL: endpointURL)
     }
 
     func sendOffer(_ sdp: RTCSessionDescription, endpointURL: URL) {
+        guard let peerConnection else { return }
         var request = URLRequest(url: endpointURL)
-        let handshakeTimeout = SYPlayerConfig.shared.whepHandshakeTimeout
-        if handshakeTimeout > 0 {
-            request.timeoutInterval = handshakeTimeout
+        let requestTimeout = SYPlayerConfig.shared.whepRequestTimeout
+        if requestTimeout > 0 {
+            request.timeoutInterval = requestTimeout
         }
         request.httpMethod = "POST"
         request.setValue("application/sdp", forHTTPHeaderField: "Content-Type")
         request.httpBody = sdp.sdp.data(using: .utf8)
 
         offerTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let self else { return }
-
-            if let error {
-                if let urlError = error as? URLError, urlError.code == .cancelled {
-                    SYPlayerConfig.shared.log(
-                        "WebRTC offer request cancelled",
-                        level: .debug
-                    )
-                    return
-                }
-                self.fail(error.localizedDescription)
-                return
-            }
-
-            guard let response = response as? HTTPURLResponse else {
-                self.fail("Invalid WHEP response")
-                return
-            }
-
-            guard 200..<300 ~= response.statusCode else {
-                self.fail("WHEP HTTP status \(response.statusCode)")
-                return
-            }
-
-            guard let data, !data.isEmpty else {
-                self.fail("WHEP answer is empty")
-                return
-            }
-
-            let answer = String(decoding: data, as: UTF8.self)
-            SYPlayerConfig.shared.log(
-                "WebRTC answer contains audio: \(answer.contains("m=audio"))",
-                level: .debug
-            )
-            SYPlayerConfig.shared.log(
-                "WebRTC answer audio SDP: \(self.audioMediaSummary(from: answer))",
-                level: .debug
-            )
-            let remoteSdp = RTCSessionDescription(type: .answer, sdp: answer)
-
-            self.peerConnection?.setRemoteDescription(remoteSdp) { [weak self] error in
-                guard let self else { return }
-
-                if let error {
-                    self.fail(error.localizedDescription)
-                }
+            self?.perform(for: peerConnection) { engine in
+                engine.handleOfferResponse(data: data, response: response, error: error, connection: peerConnection)
             }
         }
         offerTask?.resume()
     }
 
+    func handleOfferResponse(
+        data: Data?,
+        response: URLResponse?,
+        error: Error?,
+        connection: RTCPeerConnection
+    ) {
+        if let error {
+            if let urlError = error as? URLError, urlError.code == .cancelled {
+                return
+            }
+            fail(error.localizedDescription)
+            return
+        }
+
+        guard let response = response as? HTTPURLResponse else {
+            fail("Invalid WHEP response")
+            return
+        }
+
+        guard 200..<300 ~= response.statusCode else {
+            let responseBody = data.flatMap {
+                String(bytes: $0, encoding: .utf8)
+            }?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let details = responseBody
+                .flatMap { $0.isEmpty ? nil : $0 }
+                .map { ": \($0.prefix(512))" } ?? ""
+            fail("WHEP HTTP status \(response.statusCode)\(details)")
+            return
+        }
+
+        guard let data, !data.isEmpty else {
+            fail("WHEP answer is empty")
+            return
+        }
+
+        let answer = String(decoding: data, as: UTF8.self)
+        SYPlayerConfig.shared.log(
+            "WebRTC answer audio SDP: \(audioMediaSummary(from: answer))",
+            level: .debug
+        )
+        let remoteSdp = RTCSessionDescription(type: .answer, sdp: answer)
+
+        connection.setRemoteDescription(remoteSdp) { [weak self] error in
+            self?.perform(for: connection) { engine in
+                if let error {
+                    engine.fail(error.localizedDescription)
+                }
+            }
+        }
+    }
+
     func cleanupConnection() {
+        dispatchPrecondition(condition: .onQueue(Self.connectionQueue))
+        connectionID = UUID()
         offerTask?.cancel()
         offerTask = nil
         iceGatheringTimeoutWorkItem?.cancel()
@@ -414,13 +553,19 @@ private extension SYWebRTCPlayerEngine {
         hasCompletedHandshake = false
         audioStatsWorkItem?.cancel()
         audioStatsWorkItem = nil
-        remoteVideoTrack?.remove(videoFrameRenderer)
-        videoFrameRenderer.reset()
+        videoFrameRenderer?.invalidate()
+        if let videoFrameRenderer { remoteVideoTrack?.remove(videoFrameRenderer) }
+        videoFrameRenderer = nil
         remoteVideoTrack = nil
         remoteAudioTrack = nil
-        peerConnection?.close()
+        let connection = peerConnection
         peerConnection = nil
-        deactivateAudioSession()
+        connection?.delegate = nil
+        connection?.close()
+        if isAudioSessionActive {
+            isAudioSessionActive = !Self.deactivateAudioSession(rtcAudioSession)
+        }
+        isConnectionPlaying = false
     }
 
     func configureAudioSession() {
@@ -453,28 +598,28 @@ private extension SYWebRTCPlayerEngine {
         }
     }
 
-    func deactivateAudioSession() {
-        guard isAudioSessionActive else { return }
-
+    @discardableResult
+    static func deactivateAudioSession(_ rtcAudioSession: RTCAudioSession) -> Bool {
         rtcAudioSession.lockForConfiguration()
         defer { rtcAudioSession.unlockForConfiguration() }
 
         do {
             try rtcAudioSession.setActive(false)
-            isAudioSessionActive = false
             SYPlayerConfig.shared.log("WebRTC audio session deactivated", level: .debug)
+            return true
         } catch {
             SYPlayerConfig.shared.log(
                 "WebRTC audio session deactivation failed: \(error.localizedDescription)",
                 level: .error
             )
+            return false
         }
     }
 
     func fail(_ message: String) {
         SYPlayerConfig.shared.log("WebRTC engine failed: \(message)", level: .error)
         cleanupConnection()
-        isPlaying = false
+        isConnectionPlaying = false
         state = .error(message)
     }
 
@@ -490,11 +635,12 @@ private extension SYWebRTCPlayerEngine {
         )
 
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, !self.hasCompletedHandshake, !self.isPlaying else { return }
+            guard let self, self.connectionToken.isActive,
+                  !self.hasCompletedHandshake, !self.isConnectionPlaying else { return }
             self.fail("WHEP handshake timeout")
         }
         handshakeTimeoutWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: workItem)
+        Self.connectionQueue.asyncAfter(deadline: .now() + timeout, execute: workItem)
     }
 
     func completeHandshakeIfNeeded() {
@@ -506,13 +652,21 @@ private extension SYWebRTCPlayerEngine {
 
         SYPlayerConfig.shared.log("WebRTC handshake completed", level: .debug)
 
-        guard !isPlaying else { return }
+        guard !isConnectionPlaying else { return }
         state = .buffering
         scheduleFirstFrameTimeout()
     }
 
     func scheduleFirstFrameTimeout() {
         firstFrameTimeoutWorkItem?.cancel()
+
+        guard shouldEnforceFirstFrameTimeout else {
+            SYPlayerConfig.shared.log(
+                "WebRTC first-frame timeout is controlled by the transport race",
+                level: .debug
+            )
+            return
+        }
 
         let timeout = SYPlayerConfig.shared.whepFirstFrameTimeout
         guard timeout > 0 else { return }
@@ -523,11 +677,11 @@ private extension SYWebRTCPlayerEngine {
         )
 
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, !self.isPlaying else { return }
+            guard let self, self.connectionToken.isActive, !self.isConnectionPlaying else { return }
             self.fail("WHEP first frame timeout")
         }
         firstFrameTimeoutWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: workItem)
+        Self.connectionQueue.asyncAfter(deadline: .now() + timeout, execute: workItem)
     }
 
     func scheduleAudioStatsLogging() {
@@ -535,8 +689,9 @@ private extension SYWebRTCPlayerEngine {
 
         let workItem = DispatchWorkItem { [weak self] in
             guard let self, let peerConnection else { return }
-            peerConnection.statistics { [weak self] report in
-                guard let self else { return }
+            let token = self.connectionToken
+            peerConnection.statistics { report in
+                guard token.isActive else { return }
 
                 let audioStats = report.statistics.values.filter { statistic in
                     guard statistic.type == "inbound-rtp" else { return false }
@@ -576,7 +731,7 @@ private extension SYWebRTCPlayerEngine {
             }
         }
         audioStatsWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: workItem)
+        Self.connectionQueue.asyncAfter(deadline: .now() + 3, execute: workItem)
     }
 
     func audioMediaSummary(from sdp: String) -> String {
@@ -604,15 +759,21 @@ private extension SYWebRTCPlayerEngine {
     func notifyDelegate(
         _ action: @escaping (SYWebRTCPlayerEngine, SYWebRTCPlayerEngineDelegate) -> Void
     ) {
-        if Thread.isMainThread {
-            guard let delegate else { return }
-            action(self, delegate)
-            return
-        }
-
+        let token = connectionToken
         DispatchQueue.main.async { [weak self] in
-            guard let self, let delegate = self.delegate else { return }
+            guard token.isActive, let self, let delegate = self.delegate else { return }
             action(self, delegate)
+        }
+    }
+
+    func perform(
+        for connection: RTCPeerConnection,
+        _ action: @escaping (SYWebRTCPlayerEngine) -> Void
+    ) {
+        Self.connectionQueue.async { [weak self] in
+            guard let self, self.connectionToken.isActive,
+                  self.peerConnection === connection else { return }
+            action(self)
         }
     }
 
@@ -625,10 +786,10 @@ private extension SYWebRTCPlayerEngine {
         firstFrameTimeoutWorkItem?.cancel()
         firstFrameTimeoutWorkItem = nil
 
-        guard !isPlaying else { return }
+        guard !isConnectionPlaying else { return }
         SYPlayerConfig.shared.log("WebRTC video frames started", level: .debug)
         state = .playing
-        isPlaying = true
+        isConnectionPlaying = true
         scheduleAudioStatsLogging()
     }
 }
@@ -639,21 +800,29 @@ extension SYWebRTCPlayerEngine: RTCPeerConnectionDelegate {
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
-        stream.videoTracks.first?.add(videoFrameRenderer)
-        if let audioTrack = stream.audioTracks.first {
-            remoteAudioTrack = audioTrack
-            audioTrack.isEnabled = !isMuted
-            SYPlayerConfig.shared.log(
-                "WebRTC remote audio track added, enabled: \(audioTrack.isEnabled)",
-                level: .debug
-            )
+        perform(for: peerConnection) { engine in
+            if let renderer = engine.videoFrameRenderer, let track = stream.videoTracks.first {
+                if engine.remoteVideoTrack !== track {
+                    engine.remoteVideoTrack?.remove(renderer)
+                    engine.remoteVideoTrack = track
+                    track.add(renderer)
+                }
+            }
+            if let audioTrack = stream.audioTracks.first {
+                engine.remoteAudioTrack = audioTrack
+                audioTrack.isEnabled = !engine.isMuted
+            }
         }
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
-        stream.videoTracks.first?.remove(videoFrameRenderer)
-        if stream.audioTracks.contains(where: { $0 === remoteAudioTrack }) {
-            remoteAudioTrack = nil
+        perform(for: peerConnection) { engine in
+            if let renderer = engine.videoFrameRenderer {
+                stream.videoTracks.first?.remove(renderer)
+            }
+            if stream.audioTracks.contains(where: { $0 === engine.remoteAudioTrack }) {
+                engine.remoteAudioTrack = nil
+            }
         }
     }
 
@@ -661,26 +830,20 @@ extension SYWebRTCPlayerEngine: RTCPeerConnectionDelegate {
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         SYPlayerConfig.shared.log("WebRTC ICE state: \(newState)", level: .debug)
-        guard peerConnection === self.peerConnection else {
-            SYPlayerConfig.shared.log(
-                "WebRTC ignore ICE state from stale connection",
-                level: .debug
-            )
-            return
-        }
-
-        switch newState {
-        case .connected, .completed:
-            completeHandshakeIfNeeded()
-            configureAudioSession()
-        case .failed:
-            fail("WebRTC connection failed")
-        case .disconnected:
-            fail("WebRTC connection disconnected")
-        case .closed:
-            isPlaying = false
-        default:
-            break
+        perform(for: peerConnection) { engine in
+            switch newState {
+            case .connected, .completed:
+                engine.completeHandshakeIfNeeded()
+                engine.configureAudioSession()
+            case .failed:
+                engine.fail("WebRTC connection failed")
+            case .disconnected:
+                engine.fail("WebRTC connection disconnected")
+            case .closed:
+                engine.isConnectionPlaying = false
+            default:
+                break
+            }
         }
     }
 
@@ -688,8 +851,8 @@ extension SYWebRTCPlayerEngine: RTCPeerConnectionDelegate {
         SYPlayerConfig.shared.log("WebRTC ICE gathering state: \(newState)", level: .debug)
         guard newState == .complete else { return }
 
-        DispatchQueue.main.async { [weak self] in
-            self?.sendPendingOffer()
+        perform(for: peerConnection) { engine in
+            engine.sendPendingOffer()
         }
     }
 

@@ -26,7 +26,7 @@ enum SYPlayerTransportState: Equatable {
     case hidden
     case connecting(SYPlayerTransport)
     case playing(SYPlayerTransport, announceConnection: Bool)
-    case switchingToHLS(SYPlayerTransport)
+    case switching(from: SYPlayerTransport, to: SYPlayerTransport)
     case failed(SYPlayerTransport)
 
     var transport: SYPlayerTransport? {
@@ -35,8 +35,8 @@ enum SYPlayerTransportState: Equatable {
             return nil
         case .connecting(let transport), .playing(let transport, _), .failed(let transport):
             return transport
-        case .switchingToHLS(let transport):
-            return transport
+        case .switching(_, let destination):
+            return destination
         }
     }
 }

@@ -57,7 +57,7 @@ final class SYPlayerEngine {
     private var isLiveHLS = false
     private var hlsLatencyMode: SYPlayerHLSLatencyMode = .standard
     private var shouldPlay = false
-    private var hasStartedPlayback = false
+    private var hasDisplayedFirstFrame = false
     private var didRetryWithFreshAsset = false
     private var stallRecoveryAttempts = 0
     private var stallRecoveryWorkItem: DispatchWorkItem?
@@ -130,7 +130,7 @@ final class SYPlayerEngine {
         self.isLiveHLS = isLiveHLS
         self.hlsLatencyMode = isLiveHLS ? hlsLatencyMode : .standard
         shouldPlay = autoPlay
-        hasStartedPlayback = false
+        hasDisplayedFirstFrame = false
         didRetryWithFreshAsset = false
         stallRecoveryAttempts = 0
         lastErrorStatusCode = nil
@@ -269,7 +269,7 @@ final class SYPlayerEngine {
         currentURL = nil
         isLiveHLS = false
         hlsLatencyMode = .standard
-        hasStartedPlayback = false
+        hasDisplayedFirstFrame = false
         stallRecoveryAttempts = 0
         didRetryWithFreshAsset = false
     }
@@ -280,6 +280,21 @@ final class SYPlayerEngine {
         stop()
         removePeriodicTimeObserver()
         removePlayerObservers()
+    }
+
+    /// Confirms that the current item produced a frame visible to the user.
+    func firstFrameDidDisplay() {
+        guard !hasDisplayedFirstFrame else { return }
+        hasDisplayedFirstFrame = true
+        stallRecoveryAttempts = 0
+        cancelLiveHLSStallRecovery()
+        SYPlayerConfig.shared.log(
+            "Engine first frame displayed",
+            level: .debug
+        )
+        if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+            scheduleLiveHLSStallRecoveryIfNeeded()
+        }
     }
 
     private func notifyDelegate(
@@ -310,13 +325,24 @@ private extension SYPlayerEngine {
         let config = SYPlayerConfig.shared
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = config.allowNetworkResourcesWhilePaused
 
-        guard isLowLatencyHLS else {
+        guard isLiveHLS else {
             player.automaticallyWaitsToMinimizeStalling = config.automaticallyWaitsToMinimizeStalling
             item.preferredForwardBufferDuration = max(0, config.preferredForwardBufferDuration)
             return
         }
 
-        player.automaticallyWaitsToMinimizeStalling = true
+        guard isLowLatencyHLS else {
+            player.automaticallyWaitsToMinimizeStalling =
+                config.liveHLSWaitsToMinimizeStalling
+            item.preferredForwardBufferDuration = max(
+                0,
+                config.liveHLSPreferredForwardBufferDuration
+            )
+            return
+        }
+
+        player.automaticallyWaitsToMinimizeStalling =
+            config.lowLatencyHLSAutomaticallyWaitsToMinimizeStalling
         item.preferredForwardBufferDuration = max(
             0,
             config.lowLatencyHLSPreferredForwardBufferDuration
@@ -394,9 +420,12 @@ private extension SYPlayerEngine {
                         return
                     }
                     isPlaying = true
-                    hasStartedPlayback = true
-                    stallRecoveryAttempts = 0
-                    cancelLiveHLSStallRecovery()
+                    if hasDisplayedFirstFrame {
+                        stallRecoveryAttempts = 0
+                        cancelLiveHLSStallRecovery()
+                    } else {
+                        scheduleLiveHLSStallRecoveryIfNeeded()
+                    }
                     state = .playing
 
                 case .waitingToPlayAtSpecifiedRate:
@@ -444,6 +473,15 @@ private extension SYPlayerEngine {
                 let duration = total.isFinite ? total : 0
                 applyRecommendedLiveOffsetIfNeeded(to: item)
                 logBufferSnapshot(for: item, context: "item ready")
+                if shouldPlay,
+                   isLiveHLS,
+                   !player.automaticallyWaitsToMinimizeStalling {
+                    SYPlayerConfig.shared.log(
+                        "Engine start live HLS immediately after item became ready",
+                        level: .debug
+                    )
+                    player.playImmediately(atRate: 1)
+                }
                 setReadyState(duration: duration)
 
                 // если был отложенный seek — применяем
@@ -686,27 +724,35 @@ private extension SYPlayerEngine {
     }
 
     func scheduleLiveHLSStallRecoveryIfNeeded() {
+        let isWaitingForFirstFrame = !hasDisplayedFirstFrame
+        if isWaitingForFirstFrame, stallRecoveryWorkItem != nil { return }
         cancelLiveHLSStallRecovery()
 
         let config = SYPlayerConfig.shared
-        let timeout = stallRecoveryAttempts == 0
+        let timeout = isWaitingForFirstFrame || stallRecoveryAttempts == 0
             ? config.liveHLSStallRecoveryTimeout
             : config.liveHLSPostSeekRecoveryTimeout
         let maxAttempts = max(0, config.liveHLSMaxStallRecoveryAttempts)
+        let isFinalStartupCheck = isWaitingForFirstFrame
+            && stallRecoveryAttempts >= maxAttempts
         guard isLiveHLS,
               shouldPlay,
-              hasStartedPlayback,
-              player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+              isWaitingForFirstFrame
+                || player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
               timeout > 0,
-              stallRecoveryAttempts < maxAttempts,
+              isWaitingForFirstFrame || stallRecoveryAttempts < maxAttempts,
               let item else { return }
 
         let startPosition = player.currentTime().seconds
         guard startPosition.isFinite else { return }
 
+        let attemptDescription = isFinalStartupCheck
+            ? "final first-frame check"
+            : "attempt: \(stallRecoveryAttempts + 1)/\(maxAttempts)"
         SYPlayerConfig.shared.log(
-            "Engine live HLS stall watchdog scheduled: \(timeout)s "
-                + "(attempt: \(stallRecoveryAttempts + 1)/\(maxAttempts))",
+            "Engine live HLS "
+                + "\(isWaitingForFirstFrame ? "startup" : "stall") "
+                + "watchdog scheduled: \(timeout)s (\(attemptDescription))",
             level: .warning
         )
 
@@ -714,19 +760,35 @@ private extension SYPlayerEngine {
             guard let self,
                   let item,
                   self.item === item,
-                  self.shouldPlay,
-                  self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
+                  self.shouldPlay else { return }
+
+            self.stallRecoveryWorkItem = nil
+            let isStillWaitingForFirstFrame = !self.hasDisplayedFirstFrame
+            guard isStillWaitingForFirstFrame
+                    || self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            else {
+                return
+            }
 
             let currentPosition = self.player.currentTime().seconds
             guard currentPosition.isFinite else { return }
-            guard currentPosition - startPosition < 0.25 else {
+            if !isStillWaitingForFirstFrame,
+               currentPosition - startPosition >= 0.25 {
                 self.scheduleLiveHLSStallRecoveryIfNeeded()
+                return
+            }
+
+            if isStillWaitingForFirstFrame,
+               self.stallRecoveryAttempts >= maxAttempts {
+                self.failLiveHLSStartup()
                 return
             }
 
             self.stallRecoveryAttempts += 1
             self.logBufferSnapshot(for: item, context: "stall watchdog fired")
-            if self.stallRecoveryAttempts == 1 {
+            if isStillWaitingForFirstFrame {
+                self.reloadFreshLiveHLSForRecovery()
+            } else if self.stallRecoveryAttempts == 1 {
                 if !self.seekToLiveEdgeForRecovery(item: item) {
                     self.reloadFreshLiveHLSForRecovery()
                 }
@@ -832,9 +894,23 @@ private extension SYPlayerEngine {
             "Engine recover live HLS with fresh item",
             level: .warning
         )
-        hasStartedPlayback = false
+        hasDisplayedFirstFrame = false
         SYPlayerAssetWarmupStore.shared.invalidate(url: url)
         load(url: url, autoPlay: shouldPlay, allowWarmedAsset: false)
+    }
+
+    func failLiveHLSStartup() {
+        guard isLiveHLS, shouldPlay, !hasDisplayedFirstFrame else { return }
+
+        SYPlayerConfig.shared.log(
+            "Engine live HLS failed to display a first frame after all recovery attempts",
+            level: .error
+        )
+        cancelLiveHLSStallRecovery()
+        shouldPlay = false
+        player.pause()
+        isPlaying = false
+        state = .error("Live HLS first frame timeout")
     }
 
     /// Clears item-specific observers and state.

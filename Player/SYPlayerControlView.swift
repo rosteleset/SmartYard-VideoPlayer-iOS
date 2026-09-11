@@ -26,6 +26,7 @@ extension SYPlayerControlView {
         static let transportBadgeHeight: CGFloat = 28
         static let transportBadgeHorizontalInset: CGFloat = 10
         static let transportBadgeStatusSize: CGFloat = 7
+        static let transportSwitchStatusDuration: TimeInterval = 1.2
         static let transportOverlayHorizontalInset: CGFloat = 16
         static let transportOverlayMaxWidth: CGFloat = 320
     }
@@ -70,7 +71,8 @@ final class SYPlayerControlView: UIView {
     private var rightAccessoryItems: [SYPlayerControlAccessoryItem] = []
     private var rightAccessoryButtons: [String: UIButton] = [:]
     private var transportState: SYPlayerTransportState = .hidden
-    private var transportMessageWorkItem: DispatchWorkItem?
+    private var transientTransportTitle: String?
+    private var transportStatusWorkItem: DispatchWorkItem?
     private var transportTooltipWorkItem: DispatchWorkItem?
 
     // MARK: - UI Elements
@@ -90,8 +92,6 @@ final class SYPlayerControlView: UIView {
     private let transportBadgeButton = UIButton(type: .custom)
     private let transportStatusDotView = UIView()
     private let transportActivityIndicator = UIActivityIndicatorView(style: .medium)
-    private let transportMessageView = UIView()
-    private let transportMessageLabel = UILabel()
     private let transportTooltipView = UIView()
     private let transportTooltipLabel = UILabel()
 
@@ -159,7 +159,6 @@ final class SYPlayerControlView: UIView {
         updateTitleVisibility()
         fullscreenButton.isSelected = mode == .fullscreen
         updateTransportBadge()
-        updateTransportMessage()
         updateVisibleTransportTooltip()
     }
 
@@ -191,6 +190,10 @@ final class SYPlayerControlView: UIView {
         rebuildRightAccessoryStack()
     }
 
+    func setFullscreenButtonHidden(_ isHidden: Bool) {
+        fullscreenButton.isHidden = isHidden
+    }
+
     func setControlsAutoHideEnabled(_ isEnabled: Bool) {
         isControlsAutoHideEnabled = isEnabled
 
@@ -211,12 +214,13 @@ final class SYPlayerControlView: UIView {
         }
         guard transportState != state else { return }
 
+        let previousState = transportState
         transportState = state
+        updateTransientTransportStatus(from: previousState, to: state)
         if case .failed = state {
             hideLoader()
         }
         updateTransportBadge()
-        updateTransportMessage()
         updateVisibleTransportTooltip()
     }
 
@@ -393,8 +397,9 @@ final class SYPlayerControlView: UIView {
         SYPlayerConfig.shared.log("ControlView prepareToDealloc", level: .debug)
         delayItem?.cancel()
         delayItem = nil
-        transportMessageWorkItem?.cancel()
-        transportMessageWorkItem = nil
+        transportStatusWorkItem?.cancel()
+        transportStatusWorkItem = nil
+        transientTransportTitle = nil
         transportTooltipWorkItem?.cancel()
         transportTooltipWorkItem = nil
         hasVisiblePlaybackStarted = false
@@ -476,8 +481,7 @@ final class SYPlayerControlView: UIView {
     // MARK: - Transport status
 
     private func updateTransportBadge() {
-        guard mode == .fullscreen,
-              let transport = transportState.transport else {
+        guard mode == .fullscreen, let transport = transportState.transport else {
             transportBadgeButton.isHidden = true
             transportActivityIndicator.stopAnimating()
             hideTransportTooltip(animated: false)
@@ -485,24 +489,32 @@ final class SYPlayerControlView: UIView {
         }
 
         let appearance = SYPlayerConfig.shared.transportAppearance
-        let accentColor = transportColor(for: transport)
+        let badgeColor = appearance.textColor
+        let title = transientTransportTitle
+            ?? transportBadgeTitle(for: transportState, transport: transport)
+        let isPlaying: Bool
+        if case .playing = transportState {
+            isPlaying = true
+        } else {
+            isPlaying = false
+        }
 
         transportBadgeButton.isHidden = false
-        transportBadgeButton.setTitle(transport.title, for: .normal)
-        transportBadgeButton.setTitleColor(accentColor, for: .normal)
-        transportBadgeButton.layer.borderColor = accentColor.withAlphaComponent(0.82).cgColor
-        transportBadgeButton.accessibilityLabel = "\(transport.title). \(transportInfo(for: transport))"
+        transportBadgeButton.isUserInteractionEnabled = isPlaying
+        transportBadgeButton.setTitle(title, for: .normal)
+        transportBadgeButton.setTitleColor(badgeColor, for: .normal)
+        transportBadgeButton.layer.borderColor = badgeColor.withAlphaComponent(0.82).cgColor
+        transportBadgeButton.accessibilityTraits = isPlaying ? .button : .staticText
+        transportBadgeButton.accessibilityLabel = isPlaying
+            ? "\(title). \(transportInfo(for: transport))"
+            : title
 
         transportStatusDotView.isHidden = false
 
         switch transportState {
-        case .connecting, .switchingToHLS:
+        case .connecting, .switching:
             transportStatusDotView.isHidden = true
-            if case .switchingToHLS = transportState {
-                transportActivityIndicator.color = appearance.warningColor
-            } else {
-                transportActivityIndicator.color = accentColor
-            }
+            transportActivityIndicator.color = badgeColor
             transportActivityIndicator.startAnimating()
 
         case .playing:
@@ -518,124 +530,58 @@ final class SYPlayerControlView: UIView {
         }
     }
 
-    private func updateTransportMessage() {
-        transportMessageWorkItem?.cancel()
-        transportMessageWorkItem = nil
+    private func updateTransientTransportStatus(
+        from previousState: SYPlayerTransportState,
+        to newState: SYPlayerTransportState
+    ) {
+        transportStatusWorkItem?.cancel()
+        transportStatusWorkItem = nil
 
-        let appearance = SYPlayerConfig.shared.transportAppearance
-        let strings = SYPlayerConfig.shared.transportStrings
-        let isFailure: Bool
-
-        if case .failed = transportState {
-            isFailure = true
-        } else {
-            isFailure = false
-        }
-
-        updateTransportMessageLayout(isCentered: isFailure)
-
-        guard mode == .fullscreen || isFailure else {
-            hideTransportMessage()
-            return
-        }
-
-        switch transportState {
-        case .hidden:
-            hideTransportMessage()
-
-        case .connecting(let transport), .switchingToHLS(let transport):
-            showTransportMessage(
-                strings.connecting,
-                accentColor: transportColor(for: transport)
+        switch newState {
+        case .switching(let source, let destination):
+            transientTransportTitle = transportTransitionTitle(
+                from: source,
+                to: destination
             )
 
-        case .playing:
-            hideTransportMessage()
-
-        case .failed:
-            showTransportMessage(
-                strings.videoUnavailable,
-                accentColor: appearance.errorColor,
-                announce: true
-            )
-        }
-    }
-
-    private func updateTransportMessageLayout(isCentered: Bool) {
-        transportMessageView.snp.remakeConstraints {
-            $0.centerX.equalToSuperview()
-
-            if isCentered {
-                $0.centerY.equalToSuperview()
+        case .playing(let transport, _):
+            let shouldKeepTransition: Bool
+            if case .switching(_, let destination) = previousState {
+                shouldKeepTransition = destination == transport
             } else {
-                $0.top.equalTo(videoLoadingAnimationView.snp.bottom).offset(12)
+                shouldKeepTransition = false
             }
 
-            $0.leading.greaterThanOrEqualToSuperview().inset(Layout.transportOverlayHorizontalInset)
-            $0.trailing.lessThanOrEqualToSuperview().inset(Layout.transportOverlayHorizontalInset)
-            $0.width.lessThanOrEqualTo(Layout.transportOverlayMaxWidth)
+            guard shouldKeepTransition, transientTransportTitle != nil else {
+                transientTransportTitle = nil
+                return
+            }
+
+            scheduleTransportStatusDismissal()
+
+        case .hidden, .connecting, .failed:
+            transientTransportTitle = nil
         }
     }
 
-    private func showTransportMessage(
-        _ message: String,
-        accentColor: UIColor,
-        announce: Bool = false
-    ) {
-        transportMessageLabel.text = message
-        transportMessageView.layer.borderColor = accentColor.withAlphaComponent(0.7).cgColor
-        transportMessageView.isHidden = false
-        transportMessageView.layer.removeAllAnimations()
-
-        UIView.animate(
-            withDuration: 0.2,
-            delay: 0,
-            options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction]
-        ) { [weak self] in
-            self?.transportMessageView.alpha = 1
+    private func scheduleTransportStatusDismissal() {
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            transientTransportTitle = nil
+            transportStatusWorkItem = nil
+            updateTransportBadge()
         }
-
-        if announce {
-            UIAccessibility.post(notification: .announcement, argument: message)
-        }
-    }
-
-    private func hideTransportMessage(animated: Bool = true) {
-        let animations: () -> Void = { [weak self] in
-            self?.transportMessageView.alpha = 0
-        }
-        let completion: (Bool) -> Void = { [weak self] _ in
-            guard let self, transportMessageView.alpha == 0 else { return }
-            transportMessageView.isHidden = true
-        }
-
-        transportMessageView.layer.removeAllAnimations()
-        guard animated, !transportMessageView.isHidden else {
-            animations()
-            completion(true)
-            return
-        }
-
-        UIView.animate(
-            withDuration: 0.18,
-            delay: 0,
-            options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction],
-            animations: animations,
-            completion: completion
+        transportStatusWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Layout.transportSwitchStatusDuration,
+            execute: workItem
         )
     }
 
-    private func scheduleTransportMessageDismissal() {
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.hideTransportMessage()
-        }
-        transportMessageWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: workItem)
-    }
-
     private func updateVisibleTransportTooltip() {
-        guard !transportTooltipView.isHidden,
-              let transport = transportState.transport else {
+        guard !transportTooltipView.isHidden else { return }
+        guard case .playing(let transport, _) = transportState else {
+            hideTransportTooltip()
             return
         }
 
@@ -643,7 +589,7 @@ final class SYPlayerControlView: UIView {
     }
 
     private func showTransportTooltip() {
-        guard let transport = transportState.transport else { return }
+        guard case .playing(let transport, _) = transportState else { return }
 
         transportTooltipWorkItem?.cancel()
         updateVisibleTransportTooltipContent(for: transport)
@@ -668,11 +614,11 @@ final class SYPlayerControlView: UIView {
     }
 
     private func updateVisibleTransportTooltipContent(for transport: SYPlayerTransport) {
-        let accentColor = transportColor(for: transport)
+        let appearance = SYPlayerConfig.shared.transportAppearance
         let info = transportInfo(for: transport)
         transportTooltipLabel.text = info
         transportTooltipView.accessibilityLabel = info
-        transportTooltipView.layer.borderColor = accentColor.withAlphaComponent(0.7).cgColor
+        transportTooltipView.layer.borderColor = appearance.textColor.withAlphaComponent(0.7).cgColor
     }
 
     private func hideTransportTooltip(animated: Bool = true) {
@@ -705,14 +651,30 @@ final class SYPlayerControlView: UIView {
         )
     }
 
-    private func transportColor(for transport: SYPlayerTransport) -> UIColor {
-        let appearance = SYPlayerConfig.shared.transportAppearance
-        switch transport {
-        case .webRTC:
-            return appearance.webRTCColor
-        case .hls, .lowLatencyHLS:
-            return appearance.hlsColor
+    private func transportBadgeTitle(
+        for state: SYPlayerTransportState,
+        transport: SYPlayerTransport
+    ) -> String {
+        let strings = SYPlayerConfig.shared.transportStrings
+        switch state {
+        case .hidden:
+            return ""
+        case .connecting:
+            return strings.connecting
+        case .switching(let source, let destination):
+            return transportTransitionTitle(from: source, to: destination)
+        case .playing:
+            return transportDelay(for: transport)
+        case .failed:
+            return strings.videoUnavailable
         }
+    }
+
+    private func transportTransitionTitle(
+        from source: SYPlayerTransport,
+        to destination: SYPlayerTransport
+    ) -> String {
+        "\(source.title) → \(destination.title)…"
     }
 
     private func transportInfo(for transport: SYPlayerTransport) -> String {
@@ -724,6 +686,16 @@ final class SYPlayerControlView: UIView {
             return strings.hlsInfo
         case .lowLatencyHLS:
             return strings.lowLatencyHLSInfo
+        }
+    }
+
+    private func transportDelay(for transport: SYPlayerTransport) -> String {
+        let strings = SYPlayerConfig.shared.transportStrings
+        switch transport {
+        case .webRTC, .lowLatencyHLS:
+            return strings.lowLatencyDelay
+        case .hls:
+            return strings.hlsDelay
         }
     }
 
@@ -804,6 +776,10 @@ final class SYPlayerControlView: UIView {
             right: Layout.transportBadgeHorizontalInset + Layout.transportBadgeStatusSize + 8
         )
         transportBadgeButton.titleLabel?.font = transportAppearance.badgeFont
+        transportBadgeButton.titleLabel?.numberOfLines = 1
+        transportBadgeButton.titleLabel?.adjustsFontSizeToFitWidth = true
+        transportBadgeButton.titleLabel?.minimumScaleFactor = 0.8
+        transportBadgeButton.titleLabel?.lineBreakMode = .byTruncatingMiddle
         transportBadgeButton.titleLabel?.adjustsFontForContentSizeCategory = true
         transportBadgeButton.backgroundColor = transportAppearance.badgeBackgroundColor
         transportBadgeButton.layer.cornerRadius = Layout.transportBadgeHeight / 2
@@ -822,19 +798,6 @@ final class SYPlayerControlView: UIView {
         transportActivityIndicator.hidesWhenStopped = true
         transportActivityIndicator.transform = CGAffineTransform(scaleX: 0.65, y: 0.65)
         transportActivityIndicator.isUserInteractionEnabled = false
-
-        transportMessageView.backgroundColor = transportAppearance.messageBackgroundColor
-        transportMessageView.layer.cornerRadius = 12
-        transportMessageView.layer.borderWidth = 1
-        transportMessageView.isHidden = true
-        transportMessageView.alpha = 0
-        transportMessageView.isUserInteractionEnabled = false
-
-        transportMessageLabel.font = transportAppearance.messageFont
-        transportMessageLabel.textColor = transportAppearance.textColor
-        transportMessageLabel.textAlignment = .center
-        transportMessageLabel.numberOfLines = 0
-        transportMessageLabel.adjustsFontForContentSizeCategory = true
 
         transportTooltipView.backgroundColor = transportAppearance.messageBackgroundColor
         transportTooltipView.layer.cornerRadius = 12
@@ -906,8 +869,6 @@ final class SYPlayerControlView: UIView {
         mainMaskView.addSubview(transportBadgeButton)
         transportBadgeButton.addSubview(transportStatusDotView)
         transportBadgeButton.addSubview(transportActivityIndicator)
-        mainMaskView.addSubview(transportMessageView)
-        transportMessageView.addSubview(transportMessageLabel)
         mainMaskView.addSubview(transportTooltipView)
         transportTooltipView.addSubview(transportTooltipLabel)
 
@@ -961,6 +922,8 @@ final class SYPlayerControlView: UIView {
 
         transportBadgeButton.snp.makeConstraints {
             $0.trailing.equalTo(safeAreaLayoutGuide).inset(Layout.transportOverlayHorizontalInset)
+            $0.leading.greaterThanOrEqualTo(safeAreaLayoutGuide)
+                .inset(Layout.transportOverlayHorizontalInset)
             $0.bottom.equalTo(safeAreaLayoutGuide).inset(12)
             $0.height.equalTo(Layout.transportBadgeHeight)
         }
@@ -974,18 +937,6 @@ final class SYPlayerControlView: UIView {
         transportActivityIndicator.snp.makeConstraints {
             $0.center.equalTo(transportStatusDotView)
             $0.width.height.equalTo(20)
-        }
-
-        transportMessageView.snp.makeConstraints {
-            $0.centerX.equalToSuperview()
-            $0.top.equalTo(videoLoadingAnimationView.snp.bottom).offset(12)
-            $0.leading.greaterThanOrEqualToSuperview().inset(Layout.transportOverlayHorizontalInset)
-            $0.trailing.lessThanOrEqualToSuperview().inset(Layout.transportOverlayHorizontalInset)
-            $0.width.lessThanOrEqualTo(Layout.transportOverlayMaxWidth)
-        }
-
-        transportMessageLabel.snp.makeConstraints {
-            $0.edges.equalToSuperview().inset(UIEdgeInsets(top: 9, left: 12, bottom: 9, right: 12))
         }
 
         transportTooltipView.snp.makeConstraints {

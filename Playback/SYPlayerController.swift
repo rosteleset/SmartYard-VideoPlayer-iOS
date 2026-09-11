@@ -198,6 +198,11 @@ public final class SYPlayerController {
         playerView.removeAllRightAccessoryItems()
     }
 
+    /// Hides the built-in button when the host supplies a persistent fullscreen control.
+    public func setFullscreenButtonHidden(_ isHidden: Bool) {
+        playerView.setFullscreenButtonHidden(isHidden)
+    }
+
     /// Enables or disables automatic hiding of controls while playback is active.
     public func setControlsAutoHideEnabled(_ isEnabled: Bool) {
         SYPlayerConfig.shared.log(
